@@ -3,16 +3,26 @@
 #include <WebSocketsServer.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
+#include <string.h>
+
 
 // WiFi parameters
-#include "arduino_secrets.h"
+#include "secrets.h"
+
+#ifndef WIFI_SSID
+#define WIFI_SSID "wifi"
+#endif
+
+#ifndef WIFI_PASSWORD 
+#define WIFI_PASSWORD ""
+#endif
+
+
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
 
 MDNSResponder mdns;
-
 ESP8266WiFiMulti WiFiMulti;
-
 ESP8266WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 
@@ -21,12 +31,17 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 #define DIRA D7
 #define DIRB D5
 
+#define POWER_PIN D8
+
 int dirA, dirB, pwmA, pwmB;
 #define SPEED_MAX 500
 #define SPEED_LOW 400
 
 int xspeed = PWMRANGE;
 
+// speed range from -100 to +100
+int motor_speed_left = 0;
+int motor_speed_right = 0;
 
 static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 <!DOCTYPE html>
@@ -35,77 +50,586 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
     <title>T100 control center</title>
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-    <style type="text/css">
-        body {
-            background-color: #808080;
-            Color: #000000;
-        }
-    </style>
-    <script>
-        var websock;
+    <script rel="virtualjoystick.js">
+        var VirtualJoystick = function (opts) {
+            opts = opts || {};
+            this._container = opts.container || document.body;
+            this._strokeStyle = opts.strokeStyle || 'cyan';
+            this._stickEl = opts.stickElement || this._buildJoystickStick();
+            this._baseEl = opts.baseElement || this._buildJoystickBase();
+            this._mouseSupport = opts.mouseSupport !== undefined ? opts.mouseSupport : false;
+            this._stationaryBase = opts.stationaryBase || false;
+            this._baseX = this._stickX = opts.baseX || 0
+            this._baseY = this._stickY = opts.baseY || 0
+            this._limitStickTravel = opts.limitStickTravel || false
+            this._stickRadius = opts.stickRadius !== undefined ? opts.stickRadius : 100
+            this._useCssTransform = opts.useCssTransform !== undefined ? opts.useCssTransform : false
 
-        document.addEventListener('DOMContentLoaded', function() {
-            websock = new WebSocket('ws://' + window.location.hostname + ':81/');
+            this._container.style.position = "relative"
+
+            this._container.appendChild(this._baseEl)
+            this._baseEl.style.position = "absolute"
+            this._baseEl.style.display = "none"
+            this._container.appendChild(this._stickEl)
+            this._stickEl.style.position = "absolute"
+            this._stickEl.style.display = "none"
+
+            this._pressed = false;
+            this._touchIdx = null;
+
+            if (this._stationaryBase === true) {
+                this._baseEl.style.display = "";
+                this._baseEl.style.left = (this._baseX - this._baseEl.width / 2) + "px";
+                this._baseEl.style.top = (this._baseY - this._baseEl.height / 2) + "px";
+            }
+
+            this._transform = this._useCssTransform ? this._getTransformProperty() : false;
+            this._has3d = this._check3D();
+
+            var __bind = function (fn, me) {
+                return function () {
+                    return fn.apply(me, arguments);
+                };
+            };
+            this._$onTouchStart = __bind(this._onTouchStart, this);
+            this._$onTouchEnd = __bind(this._onTouchEnd, this);
+            this._$onTouchMove = __bind(this._onTouchMove, this);
+            this._container.addEventListener('touchstart', this._$onTouchStart, false);
+            this._container.addEventListener('touchend', this._$onTouchEnd, false);
+            this._container.addEventListener('touchmove', this._$onTouchMove, false);
+            if (this._mouseSupport) {
+                this._$onMouseDown = __bind(this._onMouseDown, this);
+                this._$onMouseUp = __bind(this._onMouseUp, this);
+                this._$onMouseMove = __bind(this._onMouseMove, this);
+                this._container.addEventListener('mousedown', this._$onMouseDown, false);
+                this._container.addEventListener('mouseup', this._$onMouseUp, false);
+                this._container.addEventListener('mousemove', this._$onMouseMove, false);
+            }
+        }
+
+        VirtualJoystick.prototype.destroy = function () {
+            this._container.removeChild(this._baseEl);
+            this._container.removeChild(this._stickEl);
+
+            this._container.removeEventListener('touchstart', this._$onTouchStart, false);
+            this._container.removeEventListener('touchend', this._$onTouchEnd, false);
+            this._container.removeEventListener('touchmove', this._$onTouchMove, false);
+            if (this._mouseSupport) {
+                this._container.removeEventListener('mouseup', this._$onMouseUp, false);
+                this._container.removeEventListener('mousedown', this._$onMouseDown, false);
+                this._container.removeEventListener('mousemove', this._$onMouseMove, false);
+            }
+        }
+
+        /**
+         * @returns {Boolean} true if touchscreen is currently available, false otherwise
+         */
+        VirtualJoystick.touchScreenAvailable = function () {
+            return 'createTouch' in document ? true : false;
+        }
+
+        /**
+         * microevents.js - https://github.com/jeromeetienne/microevent.js
+         */
+        ;(function (destObj) {
+            destObj.addEventListener = function (event, fct) {
+                if (this._events === undefined) this._events = {};
+                this._events[event] = this._events[event] || [];
+                this._events[event].push(fct);
+                return fct;
+            };
+            destObj.removeEventListener = function (event, fct) {
+                if (this._events === undefined) this._events = {};
+                if (event in this._events === false) return;
+                this._events[event].splice(this._events[event].indexOf(fct), 1);
+            };
+            destObj.dispatchEvent = function (event /* , args... */) {
+                if (this._events === undefined) this._events = {};
+                if (this._events[event] === undefined) return;
+                var tmpArray = this._events[event].slice();
+                for (var i = 0; i < tmpArray.length; i++) {
+                    var result = tmpArray[i].apply(this, Array.prototype.slice.call(arguments, 1))
+                    if (result !== undefined) return result;
+                }
+                return undefined
+            };
+        })(VirtualJoystick.prototype);
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //                    //
+        //////////////////////////////////////////////////////////////////////////////////
+
+        VirtualJoystick.prototype.deltaX = function () {
+            return (this._pressed ? this._stickX - this._baseX : 0)
+        }
+        VirtualJoystick.prototype.deltaY = function () {
+            return (this._pressed ? this._stickY - this._baseY : 0)
+        }
+
+        VirtualJoystick.prototype.up = function () {
+            if (this._pressed === false) return false;
+            var deltaX = this.deltaX();
+            var deltaY = this.deltaY();
+            if (deltaY >= 0) return false;
+            if (Math.abs(deltaX) > 2 * Math.abs(deltaY)) return false;
+            return true;
+        }
+        VirtualJoystick.prototype.down = function () {
+            if (this._pressed === false) return false;
+            var deltaX = this.deltaX();
+            var deltaY = this.deltaY();
+            if (deltaY <= 0) return false;
+            if (Math.abs(deltaX) > 2 * Math.abs(deltaY)) return false;
+            return true;
+        }
+        VirtualJoystick.prototype.right = function () {
+            if (this._pressed === false) return false;
+            var deltaX = this.deltaX();
+            var deltaY = this.deltaY();
+            if (deltaX <= 0) return false;
+            if (Math.abs(deltaY) > 2 * Math.abs(deltaX)) return false;
+            return true;
+        }
+        VirtualJoystick.prototype.left = function () {
+            if (this._pressed === false) return false;
+            var deltaX = this.deltaX();
+            var deltaY = this.deltaY();
+            if (deltaX >= 0) return false;
+            if (Math.abs(deltaY) > 2 * Math.abs(deltaX)) return false;
+            return true;
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //                    //
+        //////////////////////////////////////////////////////////////////////////////////
+
+        VirtualJoystick.prototype._onUp = function () {
+            this._pressed = false;
+            this._stickEl.style.display = "none";
+
+            if (this._stationaryBase == false) {
+                this._baseEl.style.display = "none";
+
+                this._baseX = this._baseY = 0;
+                this._stickX = this._stickY = 0;
+            }
+        }
+
+        VirtualJoystick.prototype._onDown = function (x, y) {
+            this._pressed = true;
+            if (this._stationaryBase == false) {
+                this._baseX = x;
+                this._baseY = y;
+                this._baseEl.style.display = "";
+                this._move(this._baseEl.style, (this._baseX - this._baseEl.width / 2), (this._baseY - this._baseEl.height / 2));
+            }
+
+            this._stickX = x;
+            this._stickY = y;
+
+            if (this._limitStickTravel === true) {
+                var deltaX = this.deltaX();
+                var deltaY = this.deltaY();
+                var stickDistance = Math.sqrt((deltaX * deltaX) + (deltaY * deltaY));
+                if (stickDistance > this._stickRadius) {
+                    var stickNormalizedX = deltaX / stickDistance;
+                    var stickNormalizedY = deltaY / stickDistance;
+
+                    this._stickX = stickNormalizedX * this._stickRadius + this._baseX;
+                    this._stickY = stickNormalizedY * this._stickRadius + this._baseY;
+                }
+            }
+
+            this._stickEl.style.display = "";
+            this._move(this._stickEl.style, (this._stickX - this._stickEl.width / 2), (this._stickY - this._stickEl.height / 2));
+        }
+
+        VirtualJoystick.prototype._onMove = function (x, y) {
+            if (this._pressed === true) {
+                this._stickX = x;
+                this._stickY = y;
+
+                if (this._limitStickTravel === true) {
+                    var deltaX = this.deltaX();
+                    var deltaY = this.deltaY();
+                    var stickDistance = Math.sqrt((deltaX * deltaX) + (deltaY * deltaY));
+                    if (stickDistance > this._stickRadius) {
+                        var stickNormalizedX = deltaX / stickDistance;
+                        var stickNormalizedY = deltaY / stickDistance;
+
+                        this._stickX = stickNormalizedX * this._stickRadius + this._baseX;
+                        this._stickY = stickNormalizedY * this._stickRadius + this._baseY;
+                    }
+                }
+
+                this._move(this._stickEl.style, (this._stickX - this._stickEl.width / 2), (this._stickY - this._stickEl.height / 2));
+            }
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //    bind touch events (and mouse events for debug)      //
+        //////////////////////////////////////////////////////////////////////////////////
+
+        VirtualJoystick.prototype._onMouseUp = function (event) {
+            return this._onUp();
+        }
+
+        VirtualJoystick.prototype._onMouseDown = function (event) {
+            event.preventDefault();
+            var x = event.clientX;
+            var y = event.clientY;
+            return this._onDown(x, y);
+        }
+
+        VirtualJoystick.prototype._onMouseMove = function (event) {
+            var x = event.clientX;
+            var y = event.clientY;
+            return this._onMove(x, y);
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //    comment               //
+        //////////////////////////////////////////////////////////////////////////////////
+
+        VirtualJoystick.prototype._onTouchStart = function (event) {
+            // if there is already a touch inprogress do nothing
+            if (this._touchIdx !== null) return;
+
+            // notify event for validation
+            var isValid = this.dispatchEvent('touchStartValidation', event);
+            if (isValid === false) return;
+
+            // dispatch touchStart
+            this.dispatchEvent('touchStart', event);
+
+            event.preventDefault();
+            // get the first who changed
+            var touch = event.changedTouches[0];
+            // set the touchIdx of this joystick
+            this._touchIdx = touch.identifier;
+
+            // forward the action
+            var x = touch.pageX;
+            var y = touch.pageY;
+            return this._onDown(x, y)
+        }
+
+        VirtualJoystick.prototype._onTouchEnd = function (event) {
+            // if there is no touch in progress, do nothing
+            if (this._touchIdx === null) return;
+
+            // dispatch touchEnd
+            this.dispatchEvent('touchEnd', event);
+
+            // try to find our touch event
+            var touchList = event.changedTouches;
+            for (var i = 0; i < touchList.length && touchList[i].identifier !== this._touchIdx; i++) ;
+            // if touch event isnt found,
+            if (i === touchList.length) return;
+
+            // reset touchIdx - mark it as no-touch-in-progress
+            this._touchIdx = null;
+
+//??????
+// no preventDefault to get click event on ios
+            event.preventDefault();
+
+            return this._onUp()
+        }
+
+        VirtualJoystick.prototype._onTouchMove = function (event) {
+            // if there is no touch in progress, do nothing
+            if (this._touchIdx === null) return;
+
+            // try to find our touch event
+            var touchList = event.changedTouches;
+            for (var i = 0; i < touchList.length && touchList[i].identifier !== this._touchIdx; i++) ;
+            // if touch event with the proper identifier isnt found, do nothing
+            if (i === touchList.length) return;
+            var touch = touchList[i];
+
+            event.preventDefault();
+
+            var x = touch.pageX;
+            var y = touch.pageY;
+            return this._onMove(x, y)
+        }
+
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //    build default stickEl and baseEl        //
+        //////////////////////////////////////////////////////////////////////////////////
+
+        /**
+         * build the canvas for joystick base
+         */
+        VirtualJoystick.prototype._buildJoystickBase = function () {
+            var canvas = document.createElement('canvas');
+            canvas.width = 126;
+            canvas.height = 126;
+
+            var ctx = canvas.getContext('2d');
+            ctx.beginPath();
+            ctx.strokeStyle = this._strokeStyle;
+            ctx.lineWidth = 6;
+            ctx.arc(canvas.width / 2, canvas.width / 2, 40, 0, Math.PI * 2, true);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.strokeStyle = this._strokeStyle;
+            ctx.lineWidth = 2;
+            ctx.arc(canvas.width / 2, canvas.width / 2, 60, 0, Math.PI * 2, true);
+            ctx.stroke();
+
+            return canvas;
+        }
+
+        /**
+         * build the canvas for joystick stick
+         */
+        VirtualJoystick.prototype._buildJoystickStick = function () {
+            var canvas = document.createElement('canvas');
+            canvas.width = 86;
+            canvas.height = 86;
+            var ctx = canvas.getContext('2d');
+            ctx.beginPath();
+            ctx.strokeStyle = this._strokeStyle;
+            ctx.lineWidth = 6;
+            ctx.arc(canvas.width / 2, canvas.width / 2, 40, 0, Math.PI * 2, true);
+            ctx.stroke();
+            return canvas;
+        }
+
+        //////////////////////////////////////////////////////////////////////////////////
+        //    move using translate3d method with fallback to translate > 'top' and 'left'
+        //      modified from https://github.com/component/translate and dependents
+        //////////////////////////////////////////////////////////////////////////////////
+
+        VirtualJoystick.prototype._move = function (style, x, y) {
+            if (this._transform) {
+                if (this._has3d) {
+                    style[this._transform] = 'translate3d(' + x + 'px,' + y + 'px, 0)';
+                } else {
+                    style[this._transform] = 'translate(' + x + 'px,' + y + 'px)';
+                }
+            } else {
+                style.left = x + 'px';
+                style.top = y + 'px';
+            }
+        }
+
+        VirtualJoystick.prototype._getTransformProperty = function () {
+            var styles = [
+                'webkitTransform',
+                'MozTransform',
+                'msTransform',
+                'OTransform',
+                'transform'
+            ];
+
+            var el = document.createElement('p');
+            var style;
+
+            for (var i = 0; i < styles.length; i++) {
+                style = styles[i];
+                if (null != el.style[style]) {
+                    return style;
+                }
+            }
+        }
+
+        VirtualJoystick.prototype._check3D = function () {
+            var prop = this._getTransformProperty();
+            // IE8<= doesn't have `getComputedStyle`
+            if (!prop || !window.getComputedStyle) return module.exports = false;
+
+            var map = {
+                webkitTransform: '-webkit-transform',
+                OTransform: '-o-transform',
+                msTransform: '-ms-transform',
+                MozTransform: '-moz-transform',
+                transform: 'transform'
+            };
+
+            // from: https://gist.github.com/lorenzopolidori/3794226
+            var el = document.createElement('div');
+            el.style[prop] = 'translate3d(1px,1px,1px)';
+            document.body.insertBefore(el, null);
+            var val = getComputedStyle(el).getPropertyValue(map[prop]);
+            document.body.removeChild(el);
+            var exports = null != val && val.length && 'none' != val;
+            return exports;
+        }
+
+    </script>
+    <script>
+
+        var joystickX = 0;
+        var joystickY = 0;
+        var padIndex = 0;
+
+        var websock;
+        var joystick;
+
+        var virtualJoystickPressed = false;
+
+        var debugText;
+
+        var powerOn = false;
+
+        document.addEventListener('DOMContentLoaded', function () {
+
+            debugText = document.getElementById('debug');
+
+            if (window.location.hostname) {
+                websock = new WebSocket('ws://' + window.location.hostname + ':81/');
+            }
             if (!websock) {
                 console.log('Unable to connect to websocket server!');
+            } else {
+                websock.onopen = function (evt) {
+                    console.log('websock open');
+                };
+                websock.onclose = function (evt) {
+                    console.log('websock close');
+                };
+                websock.onerror = function (evt) {
+                    console.log(evt);
+                };
+                websock.onmessage = function (evt) {
+                    console.log(evt);
+                };
             }
-            websock.onopen = function (evt) {
-                console.log('websock open');
-            };
-            websock.onclose = function (evt) {
-                console.log('websock close');
-            };
-            websock.onerror = function (evt) {
-                console.log(evt);
-            };
-            websock.onmessage = function (evt) {
-                console.log(evt);
-            };
+
+            joystick = new VirtualJoystick({
+                mouseSupport: true,
+                stationaryBase: true,
+                baseX: 200,
+                baseY: 200,
+                limitStickTravel: true,
+                stickRadius: 100
+            });
+            joystick.addEventListener('touchStart', function(){
+                virtualJoystickPressed = true;
+            });
+            joystick.addEventListener('touchEnd', function(){
+                virtualJoystickPressed = false;
+            });
+
+            
+            window.requestAnimationFrame(readGamepad);
+
         }, false);
 
-        document.onkeydown = function (e) {
-            switch (e.key) {
-                case ' ':
-                    e.preventDefault();
-                    websock.send("stop");
-                    break;
 
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    websock.send("left");
-                    break;
+        function readGamepad(timestamp) {
+            var pads = navigator.getGamepads();
+            var fireMoveEvent = false;
+            var x, y;
 
-                case 'ArrowUp':
-                    e.preventDefault();
-                    websock.send("go");
-                    break;
+            if (joystick.deltaX() || joystick.deltaY()) {
+                fireMoveEvent = false;
 
-                case 'ArrowRight':
-                    e.preventDefault();
-                    websock.send("right");
-                    break;
+                x = Math.round(joystick.deltaX());
+                y = Math.round(joystick.deltaY());
+                if (x !== joystickX) {
+                    fireMoveEvent = true;
+                    joystickX = x;
+                }
 
-                case 'ArrowDown':
-                    e.preventDefault();
-                    websock.send("back");
-                    break;
+                if (y !== joystickY) {
+                    fireMoveEvent = true;
+                    joystickY = y;
+                }
+           } else {
+                if (pads.length > 0) {
+                    // get first pad
+                    var pad = pads[padIndex];
+
+                    if (pad) {
+                        if (pad.buttons.length >= 2) {
+                           if (pad.buttons[0].pressed) {
+                            powerOn = true;
+                             switchPower();
+                           }
+
+                           if (pad.buttons[1].pressed) {
+                            powerOn = false;
+                             switchPower();
+                           }
+                        }
+
+                      
+                        if (pad.axes.length >= 2) {
+                          x = Math.round(pad.axes[0] * 100);
+                          y = Math.round(pad.axes[1] * 100);
+  
+                          if (x !== joystickX) {
+                              fireMoveEvent = true;
+                              joystickX = x;
+                          }
+  
+                          if (y !== joystickY) {
+                              fireMoveEvent = true;
+                              joystickY = y;
+                          }
+                       }
+                    }
+                }
             }
-        };
 
-        function buttonclick(e) {
-            websock.send(e.id);
+            if (fireMoveEvent) {
+                joystickMove(x, y);
+            }
+
+            window.requestAnimationFrame(readGamepad);
         }
+
+        function joystickMove(x, y) {
+
+            var
+                v = (100 - Math.abs(x)) * (y / 100) + y,
+                w = (100 - Math.abs(y)) * (x / 100) + x,
+                r = Math.round((v + w) / 2),
+                l = Math.round((v - w) / 2);
+
+            var text = 'X:' + x + '<br>Y:' + y + '<br>V:' + Math.round(v) + '<br>W:' + Math.round(w) + '<br>R:' + r + '<br>L:' + l;
+            console.log(text);
+            debugText.innerHTML = text;
+
+            if (websock && websock.readyState == 1) {
+                websock.send('motor:' + l + ':' + r);
+            }
+        }
+
+        function websockSend(str_command)
+        {
+          if (websock && websock.readyState == 1) {
+                websock.send(str_command);
+            }
+        }
+
+        function switchPower()
+        {
+          websockSend(powerOn ? "on" : "off");
+        }
+
+
     </script>
 </head>
 <body>
-<h1>T100 control center</h1>
-<button id="left" type="button" onclick="buttonclick(this);">LEFT</button>
-<button id="right" type="button" onclick="buttonclick(this);">RIGHT</button>
-<button id="go" type="button" onclick="buttonclick(this);">GO</button>
-<button id="back" type="button" onclick="buttonclick(this);">BACK</button>
-<button id="stop" type="button" onclick="buttonclick(this);">STOP</button>
+
+<form>
+<input type="button" id="on" value="on" onclick="websockSend(this.id)">
+<input type="button" id="off" value="off" onclick="websockSend(this.id)">
+</form>
+
+<pre id="debug"></pre>
+
 </body>
 </html>
+
 
 )rawliteral";
 
@@ -128,9 +652,40 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
     case WStype_TEXT:
       Serial.printf("[%u] get Text: %s\r\n", num, payload);
 
-      if (strcmp("go", (const char *)payload) == 0) {
+// motor:<leftspeed>:<rightspeed>
+      if (strncmp("motor", (const char *)payload, 5) == 0) {
+           const char delim[2] = ":";
+           char *token;
+
+// expect "motor"
+           token = strtok((char *)payload, delim);
+
+// expect left speed as string
+           token = strtok(NULL, delim);
+
+           motor_speed_left = atoi(token);
+
+// expect right speed as string
+           token = strtok(NULL, delim);
+
+           motor_speed_right = atoi(token);
+
+
+           setMotorSpeed(motor_speed_left, motor_speed_right);
+           Serial.print("Setting motor speed ");
+           Serial.print(motor_speed_left);
+           Serial.print(' ');
+           Serial.println(motor_speed_right);
+       } else if (strcmp("go", (const char *)payload) == 0) {
         robot_go();
       }
+else if (strcmp("on", (const char *)payload) == 0) {
+        robot_on();
+      }
+      else if (strcmp("off", (const char *)payload) == 0) {
+        robot_off();
+      }
+      
       else if (strcmp("stop", (const char *)payload) == 0) {
         robot_stop();
       }
@@ -144,7 +699,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
         robot_back();
       }
       else {
-        Serial.print("Unknown command");
+        Serial.print("Unknown command: ");
         Serial.println((const char *)payload);
       }
       // send data to all connected clients
@@ -195,6 +750,7 @@ void setup(void)
   pinMode(DIRB, OUTPUT);
   pinMode(PWMA, OUTPUT);
   pinMode(PWMB, OUTPUT);
+  pinMode(POWER_PIN, OUTPUT);
   // pinMode(HEADLIGHT, OUTPUT);
 
 
@@ -203,6 +759,8 @@ void setup(void)
 
   digitalWrite(DIRA, HIGH);
   digitalWrite(DIRB, LOW);
+
+  digitalWrite(POWER_PIN, LOW);
   //  digitalWrite(HEADLIGHT, HIGH);
 
 Serial.println();
@@ -295,6 +853,40 @@ void loop() {
 
 }
 
+void setMotorSpeed(int leftSpeed, int rightSpeed)
+{
+const int minSpeedTreshhold = 10;
+const int maxSpeedTreshhold = 100;
+
+const int minPwmSpeed = PWMRANGE / 4;
+const int maxPwmSpeed = PWMRANGE;
+  
+if (abs(leftSpeed) < minSpeedTreshhold) {
+  leftSpeed = 0;
+}
+
+if (abs(rightSpeed) < minSpeedTreshhold) {
+  rightSpeed = 0;
+}
+
+
+  
+  digitalWrite(DIRA, leftSpeed < 0 ? HIGH : LOW);
+  digitalWrite(DIRB, rightSpeed > 0 ? HIGH : LOW);
+
+if (leftSpeed) {
+  analogWrite(PWMA, map(abs(leftSpeed), 0, maxSpeedTreshhold, minPwmSpeed, maxPwmSpeed));
+} else {
+  analogWrite(PWMA, 0);
+}
+
+  if (rightSpeed) {
+    analogWrite(PWMB, map(abs(rightSpeed), 0, maxSpeedTreshhold, minPwmSpeed, maxPwmSpeed));
+  } else {
+    analogWrite(PWMB, 0);
+  }
+  
+}
 
 void motor()
 {
@@ -303,6 +895,8 @@ void motor()
   analogWrite(PWMA, xspeed);
   analogWrite(PWMB, xspeed);
 }
+
+
 
 int robot_left() {
   dirA = LOW;
@@ -351,4 +945,14 @@ int robot_stop() {
   motor();
 
   return 1;
+}
+
+void robot_on()
+{
+digitalWrite(POWER_PIN, HIGH);
+}
+
+void robot_off()
+{
+digitalWrite(POWER_PIN, LOW);
 }
