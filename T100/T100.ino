@@ -54,13 +54,13 @@ char buffer[128];
 //MDNSResponder mdns;
 #define mdns MDNS
 WiFiMulti WiFiMulti;
-WebServer server(80);
-WebSocketsServer webSocket = WebSocketsServer(81);
+WebServer server(HTTP_PORT);
+WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT);
 #else
 MDNSResponder mdns;
 ESP8266WiFiMulti WiFiMulti;
-ESP8266WebServer server(80);
-WebSocketsServer webSocket = WebSocketsServer(81);
+ESP8266WebServer server(HTTP_PORT);
+WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT);
 #endif
 
 enum RobotState
@@ -457,8 +457,8 @@ void initializeWiFi()
 #endif
         {
             Serial.println("MDNS responder started");
-            mdns.addService("http", "tcp", 80);
-            mdns.addService("ws", "tcp", 81);
+            mdns.addService("http", "tcp", HTTP_PORT);
+            mdns.addService("ws", "tcp", WEBSOCKET_PORT);
         }
         else
         {
