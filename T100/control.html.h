@@ -63,6 +63,7 @@ static const char PROGMEM INDEX_HTML[] = R"HTML(
             });
             joystick.addEventListener('touchEnd', function(){
                 virtualJoystickPressed = false;
+                joystickMove(0, 0);
             });
 
             
