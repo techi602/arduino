@@ -19,12 +19,6 @@
 #define WIFI_PASSWORD ""
 #endif
 
-// Leave empty to disable token authentication. Set a long random value in
-// secrets.h before operating the robot on an untrusted network.
-#ifndef CONTROL_TOKEN
-#define CONTROL_TOKEN ""
-#endif
-
 #ifdef ESP32
 #ifndef PWMA
 #define PWMA 25

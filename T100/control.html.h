@@ -149,7 +149,6 @@ static const char PROGMEM INDEX_HTML[] = R"HTML(
             var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
             websock = new WebSocket(protocol + window.location.hostname + ':81/');
             websock.onopen = function () {
-                websockSend('auth:' + '__CONTROL_TOKEN__');
                 console.log('websock open');
             };
             websock.onclose = function () {

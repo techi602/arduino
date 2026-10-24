@@ -46,10 +46,6 @@
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
 
-#ifndef WEBSOCKETS_SERVER_CLIENT_MAX
-#define WEBSOCKETS_SERVER_CLIENT_MAX 5
-#endif
-
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
 char buffer[128];
@@ -73,7 +69,6 @@ int motor_speed_right = 0;
 bool robot_powered = false;
 int controller_id = -1;
 unsigned long last_motor_command = 0;
-bool authenticated[WEBSOCKETS_SERVER_CLIENT_MAX] = {};
 
 bool parseMotorCommand(const uint8_t *payload, size_t length, int &leftSpeed, int &rightSpeed)
 {
@@ -121,16 +116,7 @@ bool isCommand(const uint8_t *payload, size_t length, const char *command)
 
 bool hasControl(uint8_t client)
 {
-    return controller_id == client && authenticated[client];
-}
-
-bool tokenMatches(const uint8_t *payload, size_t length)
-{
-    const size_t prefixLength = 5;
-    const size_t tokenLength = strlen(CONTROL_TOKEN);
-    return length == prefixLength + tokenLength &&
-           memcmp(payload, "auth:", prefixLength) == 0 &&
-           memcmp(payload + prefixLength, CONTROL_TOKEN, tokenLength) == 0;
+    return controller_id == client;
 }
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
@@ -141,7 +127,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         case WStype_DISCONNECTED:
         {
             Serial.printf("[%u] Disconnected!\r\n", num);
-            authenticated[num] = false;
             if (controller_id == num)
             {
                 controller_id = -1;
@@ -153,8 +138,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         }
         case WStype_CONNECTED:
         {
-            authenticated[num] = CONTROL_TOKEN[0] == '\0';
-            if (controller_id < 0 && authenticated[num])
+            if (controller_id < 0)
             {
                 controller_id = num;
             }
@@ -175,26 +159,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         case WStype_TEXT:
         {
             Serial.printf("[%u] get Text length: %u\r\n", num, length);
-
-            if (isCommand(payload, length, "auth") ||
-                (length >= 5 && memcmp(payload, "auth:", 5) == 0))
-            {
-                if (CONTROL_TOKEN[0] == '\0' || tokenMatches(payload, length))
-                {
-                    authenticated[num] = true;
-                    if (controller_id < 0)
-                    {
-                        controller_id = num;
-                    }
-                    webSocket.sendTXT(num, "AUTH_OK");
-                }
-                else
-                {
-                    authenticated[num] = false;
-                    webSocket.sendTXT(num, "AUTH_FAILED");
-                }
-                break;
-            }
 
             if (!hasControl(num))
             {
@@ -284,11 +248,6 @@ void handleRoot()
     }
     String html = page.readString();
     page.close();
-
-    html.replace("</head>",
-                 String("<script>window.T100_CONTROL_TOKEN='") +
-                     CONTROL_TOKEN +
-                     "';</script></head>");
     server.send(200, "text/html", html);
 }
 
@@ -442,11 +401,6 @@ void setup(void)
 
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
-
-    if (CONTROL_TOKEN[0] == '\0')
-    {
-        Serial.println("WARNING: WebSocket token authentication is disabled");
-    }
 }
 
 void loop()

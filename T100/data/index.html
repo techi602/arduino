@@ -96,7 +96,6 @@
             var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
             websock = new WebSocket(protocol + window.location.hostname + ':81/');
             websock.onopen = function () {
-                websockSend('auth:' + window.T100_CONTROL_TOKEN);
                 console.log('websock open');
             };
             websock.onclose = function () {

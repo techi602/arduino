@@ -22,7 +22,7 @@ T100 is an ESP8266/ESP32 tracked-robot controller. The firmware drives two 9 V D
 - Upload the web assets separately with `pio run -e d1_mini -t uploadfs`.
 - Run `git diff --check` before committing.
 
-Do not commit build output, credentials, or other generated files. Wi-Fi credentials and the control token belong in the ignored secrets configuration, not in tracked source files.
+Do not commit build output, credentials, or other generated files. Wi-Fi credentials belong in the ignored secrets configuration, not in tracked source files.
 
 ## Safety requirements
 
