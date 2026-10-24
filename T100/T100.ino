@@ -44,10 +44,14 @@
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 // WiFi parameters
+#if defined(__has_include)
+#if __has_include("secrets.h")
 #include "secrets.h"
+#endif
+#endif
 
 #ifndef WIFI_SSID
-#define WIFI_SSID "wifi"
+#define WIFI_SSID ""
 #endif
 
 #ifndef WIFI_PASSWORD
@@ -296,9 +300,10 @@ void setup(void)
 
     oled.putString("Connecting to Wi-Fi...");
   
-    // my mobile hotspot
-    WiFiMulti.addAP("AndroidAP", "uche7888");
-    WiFiMulti.addAP(ssid, password);
+    if (ssid[0] != '\0')
+    {
+        WiFiMulti.addAP(ssid, password);
+    }
 
     while (WiFiMulti.run() != WL_CONNECTED)
     {
