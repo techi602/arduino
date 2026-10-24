@@ -66,7 +66,17 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 // speed range from -100 to +100
 int motor_speed_left = 0;
 int motor_speed_right = 0;
-bool robot_powered = false;
+enum RobotState
+{
+    STATE_OFFLINE,
+    STATE_READY,
+    STATE_ARMED,
+    STATE_DRIVING,
+    STATE_FAULT
+};
+
+RobotState robot_state = STATE_OFFLINE;
+bool network_available = false;
 int controller_id = -1;
 unsigned long last_motor_command = 0;
 
@@ -119,6 +129,46 @@ bool hasControl(uint8_t client)
     return controller_id == client;
 }
 
+bool isRobotPowered()
+{
+    return robot_state == STATE_ARMED || robot_state == STATE_DRIVING;
+}
+
+void setRobotState(RobotState state)
+{
+    robot_state = state;
+}
+
+void robot_stop();
+void robot_off();
+
+void updateNetworkState()
+{
+    const bool connected = WiFi.status() == WL_CONNECTED;
+
+    if (connected == network_available)
+    {
+        return;
+    }
+
+    network_available = connected;
+    if (network_available)
+    {
+        if (robot_state == STATE_OFFLINE)
+        {
+            setRobotState(STATE_READY);
+        }
+        Serial.println("Network available; robot ready");
+    }
+    else
+    {
+        controller_id = -1;
+        robot_off();
+        setRobotState(STATE_OFFLINE);
+        Serial.println("Network unavailable; robot stopped");
+    }
+}
+
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 {
     Serial.printf("webSocketEvent(%d, %d, ...)\r\n", num, type);
@@ -169,10 +219,18 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
             // motor:<leftspeed>:<rightspeed>
             if (length >= 5 && memcmp(payload, "motor", 5) == 0)
             {
-                if (robot_powered && parseMotorCommand(payload, length, motor_speed_left, motor_speed_right))
+                int requestedLeft;
+                int requestedRight;
+                if (isRobotPowered() &&
+                    parseMotorCommand(payload, length, requestedLeft, requestedRight))
                 {
+                    motor_speed_left = requestedLeft;
+                    motor_speed_right = requestedRight;
                     setMotorSpeed(motor_speed_left, motor_speed_right);
                     last_motor_command = millis();
+                    setRobotState(motor_speed_left == 0 && motor_speed_right == 0
+                                      ? STATE_ARMED
+                                      : STATE_DRIVING);
                     Serial.print("Setting motor speed ");
                     Serial.print(motor_speed_left);
                     Serial.print(' ');
@@ -180,7 +238,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
                 }
                 else
                 {
-                    Serial.println(robot_powered ? "Invalid motor command" : "Motor command rejected while powered off");
+                    Serial.println(isRobotPowered()
+                                       ? "Invalid motor command"
+                                       : "Motor command rejected in current state");
                 }
 
                 // display delay too slow blocking socket IO
@@ -198,8 +258,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
             else if (isCommand(payload, length, "on"))
             {
                 robot_on();
-                oled.setCursor(0, 0);
-                oled.print("FIRE!        ");
+                if (robot_state == STATE_ARMED)
+                {
+                    oled.setCursor(0, 0);
+                    oled.print("FIRE!        ");
+                }
             }
             else if (isCommand(payload, length, "off"))
             {
@@ -353,6 +416,8 @@ void setup(void)
 
     if (WiFi.status() == WL_CONNECTED)
     {
+        network_available = true;
+        setRobotState(STATE_READY);
         Serial.println("");
         Serial.print("Connected to ");
         Serial.println(ssid);
@@ -386,6 +451,8 @@ void setup(void)
     }
     else
     {
+        network_available = false;
+        setRobotState(STATE_OFFLINE);
         Serial.println("");
         Serial.println("Wi-Fi unavailable; continuing without network");
         oled.clearDisplay();
@@ -406,12 +473,15 @@ void setup(void)
 void loop()
 {
     WiFiMulti.run();
+    updateNetworkState();
     webSocket.loop();
     server.handleClient();
 
-    if (robot_powered && millis() - last_motor_command > MOTOR_COMMAND_TIMEOUT_MS)
+    if (robot_state == STATE_DRIVING &&
+        millis() - last_motor_command > MOTOR_COMMAND_TIMEOUT_MS)
     {
         robot_stop();
+        Serial.println("Motor watchdog expired; robot armed");
     }
 }
 
@@ -466,22 +536,40 @@ void setMotorSpeed(int leftSpeed, int rightSpeed)
 
 void robot_stop()
 {
+    const bool wasDriving = robot_state == STATE_DRIVING;
     motor_speed_left = 0;
     motor_speed_right = 0;
     setMotorSpeed(0, 0);
+    if (wasDriving)
+    {
+        setRobotState(STATE_ARMED);
+    }
 }
 
 void robot_on()
 {
+    if (!network_available || robot_state != STATE_READY)
+    {
+        Serial.println("Power-on rejected in current state");
+        return;
+    }
+
     robot_stop();
     last_motor_command = millis();
-    robot_powered = true;
     digitalWrite(POWER_PIN, HIGH);
+    setRobotState(STATE_ARMED);
 }
 
 void robot_off()
 {
     robot_stop();
-    robot_powered = false;
     digitalWrite(POWER_PIN, LOW);
+    if (!network_available)
+    {
+        setRobotState(STATE_OFFLINE);
+    }
+    else if (robot_state != STATE_FAULT)
+    {
+        setRobotState(STATE_READY);
+    }
 }
