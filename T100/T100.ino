@@ -305,39 +305,52 @@ void setup(void)
         WiFiMulti.addAP(ssid, password);
     }
 
-    while (WiFiMulti.run() != WL_CONNECTED)
+    const unsigned long wifiTimeout = 15000;
+    unsigned long wifiStart = millis();
+    while (WiFiMulti.run() != WL_CONNECTED && millis() - wifiStart < wifiTimeout)
     {
         //oled.write('.');
         Serial.print(".");
         delay(100);
     }
 
-    Serial.println("");
-    Serial.print("Connected to ");
-    Serial.println(ssid);
-    Serial.println(WiFi.localIP());
-
-    oled.clearDisplay();
-    oled.setTextXY(0, 0);
-    oled.putString("Connected");
-    oled.setTextXY(1, 0);
-    oled.putString(ssid);
-    oled.setTextXY(2, 0);
-    oled.putString(IPAddress2String(WiFi.localIP()));
-    
-    if (mdns.begin("t100", WiFi.localIP()))
+    if (WiFi.status() == WL_CONNECTED)
     {
-        Serial.println("MDNS responder started");
-        mdns.addService("http", "tcp", 80);
-        mdns.addService("ws", "tcp", 81);
+        Serial.println("");
+        Serial.print("Connected to ");
+        Serial.println(ssid);
+        Serial.println(WiFi.localIP());
+
+        oled.clearDisplay();
+        oled.setTextXY(0, 0);
+        oled.putString("Connected");
+        oled.setTextXY(1, 0);
+        oled.putString(ssid);
+        oled.setTextXY(2, 0);
+        oled.putString(IPAddress2String(WiFi.localIP()));
+
+        if (mdns.begin("t100", WiFi.localIP()))
+        {
+            Serial.println("MDNS responder started");
+            mdns.addService("http", "tcp", 80);
+            mdns.addService("ws", "tcp", 81);
+        }
+        else
+        {
+            Serial.println("MDNS.begin failed");
+        }
+        Serial.print("Connect to http://t100.local");
+        Serial.println("");
+        Serial.println(WiFi.localIP());
     }
     else
     {
-        Serial.println("MDNS.begin failed");
+        Serial.println("");
+        Serial.println("Wi-Fi unavailable; continuing without network");
+        oled.clearDisplay();
+        oled.setTextXY(0, 0);
+        oled.putString("Wi-Fi unavailable");
     }
-    Serial.print("Connect to http://t100.local");
-    Serial.println("");
-    Serial.println(WiFi.localIP());
 
     server.on("/", handleRoot);
     server.on("/virtualjoystick.js", handleJoystickJs);
@@ -351,6 +364,7 @@ void setup(void)
 
 void loop()
 {
+    WiFiMulti.run();
     webSocket.loop();
     server.handleClient();
 }
