@@ -56,7 +56,7 @@
 
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
-char buffer[40];
+char buffer[128];
 
 #ifdef ESP32
 //MDNSResponder mdns;
@@ -141,8 +141,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         case WStype_CONNECTED:
         {
             IPAddress ip = webSocket.remoteIP(num);
-            sprintf(buffer, "[%u] Connected from %d.%d.%d.%d url: %s\r\n", num, ip[0], ip[1], ip[2], ip[3], payload);
-            Serial.printf(buffer);
+            snprintf(buffer, sizeof(buffer), "[%u] Connected from %d.%d.%d.%d url: %.*s\r\n", num, ip[0], ip[1], ip[2], ip[3], (int)length, payload);
+            Serial.printf("%s", buffer);
             
             // Send the current LED status
             webSocket.sendTXT(0, "HELLO", 5);
