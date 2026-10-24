@@ -2,7 +2,7 @@
  * T100 robot control
  * 
  * Wemos D1 R2 + DOIT.AM shield https://github.com/SmartArduino/SZDOITWiKi/wiki/Arduino---2-way%26amp%3B16-way-motor%26amp%3Bservo-shield
- * SSD1306 oled siplay https://github.com/acrobotic/Ai_Ardulib_SSD1306
+ * SSD1306 OLED display driven through U8g2/U8x8
  * 
  * joystick coordinates math http://home.kendra.com/mauser/Joystick.html
  * 
@@ -37,12 +37,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <Wire.h>
-#include <ACROBOTIC_SSD1306.h>
+#include <U8x8lib.h>
 
 #include "config.h"
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
+
+U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);
 
 #ifndef WEBSOCKETS_SERVER_CLIENT_MAX
 #define WEBSOCKETS_SERVER_CLIENT_MAX 5
@@ -146,7 +148,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
                 robot_off();
             }
             oled.clearDisplay();
-            oled.putString("Client disconnected");
+            oled.print("Client disconnected");
             break;
         }
         case WStype_CONNECTED:
@@ -164,10 +166,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
             webSocket.sendTXT(num, "HELLO", 5);
     
             oled.clearDisplay();
-            oled.setTextXY(0,0);
-            oled.putString("Client connected");
-            oled.setTextXY(1,0);
-            oled.putString(buffer);
+            oled.setCursor(0, 0);
+            oled.print("Client connected");
+            oled.setCursor(0, 1);
+            oled.print(buffer);
             break;
         }
         case WStype_TEXT:
@@ -219,21 +221,21 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 
                 // display delay too slow blocking socket IO
                 /*
-                oled.setTextXY(0,0);
-                oled.putString("Motor speed");
-                oled.setTextXY(1,0);
-                oled.putString("       ");
-                oled.putNumber(motor_speed_left);
-                oled.setTextXY(2,0);
-                oled.putString("       ");
-                oled.putNumber(motor_speed_right);
+                oled.setCursor(0, 0);
+                oled.print("Motor speed");
+                oled.setCursor(0, 1);
+                oled.print("       ");
+                oled.print(motor_speed_left);
+                oled.setCursor(0, 2);
+                oled.print("       ");
+                oled.print(motor_speed_right);
                 */
             }
             else if (isCommand(payload, length, "on"))
             {
                 robot_on();
-                oled.setTextXY(0,0);
-                oled.putString("FIRE!        ");
+                oled.setCursor(0, 0);
+                oled.print("FIRE!        ");
             }
             else if (isCommand(payload, length, "off"))
             {
@@ -367,12 +369,14 @@ void setup(void)
         Serial.println("LittleFS mount failed");
     }
 
-    // Initialze SSD1306 OLED display
-    oled.init();
+    // Initialize the SSD1306 OLED display
+    oled.begin();
+    oled.setPowerSave(0);
+    oled.setFont(u8x8_font_chroma48medium8_r);
     oled.clearDisplay();
-    oled.setTextXY(0,0);
+    oled.setCursor(0, 0);
 
-    oled.putString("Connecting to Wi-Fi...");
+    oled.print("Connecting to Wi-Fi...");
   
     if (ssid[0] != '\0')
     {
@@ -396,12 +400,12 @@ void setup(void)
         Serial.println(WiFi.localIP());
 
         oled.clearDisplay();
-        oled.setTextXY(0, 0);
-        oled.putString("Connected");
-        oled.setTextXY(1, 0);
-        oled.putString(ssid);
-        oled.setTextXY(2, 0);
-        oled.putString(IPAddress2String(WiFi.localIP()));
+        oled.setCursor(0, 0);
+        oled.print("Connected");
+        oled.setCursor(0, 1);
+        oled.print(ssid);
+        oled.setCursor(0, 2);
+        oled.print(IPAddress2String(WiFi.localIP()));
 
 #ifdef ESP32
         if (mdns.begin(DEVICE_HOSTNAME))
@@ -426,8 +430,8 @@ void setup(void)
         Serial.println("");
         Serial.println("Wi-Fi unavailable; continuing without network");
         oled.clearDisplay();
-        oled.setTextXY(0, 0);
-        oled.putString("Wi-Fi unavailable");
+        oled.setCursor(0, 0);
+        oled.print("Wi-Fi unavailable");
     }
 
     server.on("/", handleRoot);
