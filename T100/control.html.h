@@ -20,6 +20,8 @@ static const char PROGMEM INDEX_HTML[] = R"HTML(
         var debugText;
 
         var powerOn = false;
+        var lastGamepadButtons = [];
+        var reconnectTimer;
 
         document.addEventListener('mouseup', function () {
           joystickMove(0,0);
@@ -30,25 +32,7 @@ static const char PROGMEM INDEX_HTML[] = R"HTML(
 
             debugText = document.getElementById('debug');
 
-            if (window.location.hostname) {
-                websock = new WebSocket('ws://' + window.location.hostname + ':81/');
-            }
-            if (!websock) {
-                console.log('Unable to connect to websocket server!');
-            } else {
-                websock.onopen = function (evt) {
-                    console.log('websock open');
-                };
-                websock.onclose = function (evt) {
-                    console.log('websock close');
-                };
-                websock.onerror = function (evt) {
-                    console.log(evt);
-                };
-                websock.onmessage = function (evt) {
-                    console.log(evt);
-                };
-            }
+            connectWebSocket();
 
             joystick = new VirtualJoystick({
                 mouseSupport: true,
@@ -98,15 +82,16 @@ static const char PROGMEM INDEX_HTML[] = R"HTML(
 
                     if (pad) {
                         if (pad.buttons.length >= 2) {
-                           if (pad.buttons[0].pressed) {
+                           if (pad.buttons[0].pressed && !lastGamepadButtons[0]) {
                             powerOn = true;
                              switchPower();
                            }
 
-                           if (pad.buttons[1].pressed) {
+                           if (pad.buttons[1].pressed && !lastGamepadButtons[1]) {
                             powerOn = false;
                              switchPower();
                            }
+                           lastGamepadButtons = pad.buttons.map(function(button) { return button.pressed; });
                         }
 
                       
@@ -159,10 +144,35 @@ static const char PROGMEM INDEX_HTML[] = R"HTML(
             }
         }
 
+        function connectWebSocket() {
+            if (!window.location.hostname) return;
+            var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            websock = new WebSocket(protocol + window.location.hostname + ':81/');
+            websock.onopen = function () {
+                websockSend('auth:' + '__CONTROL_TOKEN__');
+                console.log('websock open');
+            };
+            websock.onclose = function () {
+                joystickMove(0, 0);
+                console.log('websock close');
+                clearTimeout(reconnectTimer);
+                reconnectTimer = setTimeout(connectWebSocket, 1000);
+            };
+            websock.onerror = function (evt) { console.log(evt); };
+            websock.onmessage = function (evt) { console.log(evt); };
+        }
+
         function switchPower()
         {
           websockSend(powerOn ? "on" : "off");
         }
+
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) {
+                joystickMove(0, 0);
+                websockSend('stop');
+            }
+        });
 
 
     </script>

@@ -37,25 +37,15 @@
 #include <Wire.h>
 #include <ACROBOTIC_SSD1306.h>
 
+#include "config.h"
 #include "joystick.js.h"
 #include "control.html.h"
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
-// WiFi parameters
-#if defined(__has_include)
-#if __has_include("secrets.h")
-#include "secrets.h"
-#endif
-#endif
-
-#ifndef WIFI_SSID
-#define WIFI_SSID ""
-#endif
-
-#ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD ""
+#ifndef WEBSOCKETS_SERVER_CLIENT_MAX
+#define WEBSOCKETS_SERVER_CLIENT_MAX 5
 #endif
 
 const char* ssid = WIFI_SSID;
@@ -74,33 +64,13 @@ ESP8266WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 #endif
 
-#ifdef ESP32
-#ifndef PWMA
-#define PWMA 25
-#endif
-#ifndef PWMB
-#define PWMB 26
-#endif
-#ifndef DIRA
-#define DIRA 27
-#endif
-#ifndef DIRB
-#define DIRB 14
-#endif
-#ifndef POWER_PIN
-#define POWER_PIN 33
-#endif
-#else
-#define PWMA D6
-#define PWMB D4
-#define DIRA D7
-#define DIRB D5
-#define POWER_PIN D8
-#endif
-
 // speed range from -100 to +100
 int motor_speed_left = 0;
 int motor_speed_right = 0;
+bool robot_powered = false;
+int controller_id = -1;
+unsigned long last_motor_command = 0;
+bool authenticated[WEBSOCKETS_SERVER_CLIENT_MAX] = {};
 
 bool parseMotorCommand(const uint8_t *payload, size_t length, int &leftSpeed, int &rightSpeed)
 {
@@ -146,6 +116,20 @@ bool isCommand(const uint8_t *payload, size_t length, const char *command)
     return length == commandLength && memcmp(payload, command, commandLength) == 0;
 }
 
+bool hasControl(uint8_t client)
+{
+    return controller_id == client && authenticated[client];
+}
+
+bool tokenMatches(const uint8_t *payload, size_t length)
+{
+    const size_t prefixLength = 5;
+    const size_t tokenLength = strlen(CONTROL_TOKEN);
+    return length == prefixLength + tokenLength &&
+           memcmp(payload, "auth:", prefixLength) == 0 &&
+           memcmp(payload + prefixLength, CONTROL_TOKEN, tokenLength) == 0;
+}
+
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 {
     Serial.printf("webSocketEvent(%d, %d, ...)\r\n", num, type);
@@ -154,19 +138,29 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         case WStype_DISCONNECTED:
         {
             Serial.printf("[%u] Disconnected!\r\n", num);
-            robot_stop();
+            authenticated[num] = false;
+            if (controller_id == num)
+            {
+                controller_id = -1;
+                robot_off();
+            }
             oled.clearDisplay();
             oled.putString("Client disconnected");
             break;
         }
         case WStype_CONNECTED:
         {
+            authenticated[num] = CONTROL_TOKEN[0] == '\0';
+            if (controller_id < 0 && authenticated[num])
+            {
+                controller_id = num;
+            }
             IPAddress ip = webSocket.remoteIP(num);
             snprintf(buffer, sizeof(buffer), "[%u] Connected from %d.%d.%d.%d url: %.*s\r\n", num, ip[0], ip[1], ip[2], ip[3], (int)length, payload);
             Serial.printf("%s", buffer);
             
             // Send the current LED status
-            webSocket.sendTXT(0, "HELLO", 5);
+            webSocket.sendTXT(num, "HELLO", 5);
     
             oled.clearDisplay();
             oled.setTextXY(0,0);
@@ -178,13 +172,40 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         case WStype_TEXT:
         {
             Serial.printf("[%u] get Text length: %u\r\n", num, length);
+
+            if (isCommand(payload, length, "auth") ||
+                (length >= 5 && memcmp(payload, "auth:", 5) == 0))
+            {
+                if (CONTROL_TOKEN[0] == '\0' || tokenMatches(payload, length))
+                {
+                    authenticated[num] = true;
+                    if (controller_id < 0)
+                    {
+                        controller_id = num;
+                    }
+                    webSocket.sendTXT(num, "AUTH_OK");
+                }
+                else
+                {
+                    authenticated[num] = false;
+                    webSocket.sendTXT(num, "AUTH_FAILED");
+                }
+                break;
+            }
+
+            if (!hasControl(num))
+            {
+                Serial.println("Command rejected: client is not the controller");
+                break;
+            }
     
             // motor:<leftspeed>:<rightspeed>
             if (length >= 5 && memcmp(payload, "motor", 5) == 0)
             {
-                if (parseMotorCommand(payload, length, motor_speed_left, motor_speed_right))
+                if (robot_powered && parseMotorCommand(payload, length, motor_speed_left, motor_speed_right))
                 {
                     setMotorSpeed(motor_speed_left, motor_speed_right);
+                    last_motor_command = millis();
                     Serial.print("Setting motor speed ");
                     Serial.print(motor_speed_left);
                     Serial.print(' ');
@@ -192,7 +213,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
                 }
                 else
                 {
-                    Serial.println("Invalid motor command");
+                    Serial.println(robot_powered ? "Invalid motor command" : "Motor command rejected while powered off");
                 }
 
                 // display delay too slow blocking socket IO
@@ -252,7 +273,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 
 void handleRoot()
 {
-    server.send_P(200, "text/html", INDEX_HTML);
+    String page = FPSTR(INDEX_HTML);
+    page.replace("__CONTROL_TOKEN__", CONTROL_TOKEN);
+    server.send(200, "text/html", page);
 }
 
 void handleJoystickJs()
@@ -294,6 +317,15 @@ void setup(void)
     pinMode(PWMB, OUTPUT);
     pinMode(POWER_PIN, OUTPUT);
 
+#ifdef ESP32
+    analogWriteResolution(10);
+    analogWriteFrequency(PWMA, 1000);
+    analogWriteFrequency(PWMB, 1000);
+#else
+    analogWriteRange(PWMRANGE);
+    analogWriteFreq(1000);
+#endif
+
     analogWrite(PWMA, 0);
     analogWrite(PWMB, 0);
 
@@ -322,7 +354,7 @@ void setup(void)
         WiFiMulti.addAP(ssid, password);
     }
 
-    const unsigned long wifiTimeout = 15000;
+    const unsigned long wifiTimeout = WIFI_CONNECT_TIMEOUT_MS;
     unsigned long wifiStart = millis();
     while (WiFiMulti.run() != WL_CONNECTED && millis() - wifiStart < wifiTimeout)
     {
@@ -346,7 +378,7 @@ void setup(void)
         oled.setTextXY(2, 0);
         oled.putString(IPAddress2String(WiFi.localIP()));
 
-        if (mdns.begin("t100", WiFi.localIP()))
+        if (mdns.begin(DEVICE_HOSTNAME, WiFi.localIP()))
         {
             Serial.println("MDNS responder started");
             mdns.addService("http", "tcp", 80);
@@ -377,6 +409,11 @@ void setup(void)
 
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
+
+    if (CONTROL_TOKEN[0] == '\0')
+    {
+        Serial.println("WARNING: WebSocket token authentication is disabled");
+    }
 }
 
 void loop()
@@ -384,6 +421,11 @@ void loop()
     WiFiMulti.run();
     webSocket.loop();
     server.handleClient();
+
+    if (robot_powered && millis() - last_motor_command > MOTOR_COMMAND_TIMEOUT_MS)
+    {
+        robot_stop();
+    }
 }
 
 /**
@@ -394,21 +436,21 @@ void loop()
  */
 void setMotorSpeed(int leftSpeed, int rightSpeed)
 {
-    const int minSpeedTreshhold = 10;
-    const int maxSpeedTreshhold = 100;
+    const int minSpeedThreshold = MOTOR_MIN_SPEED;
+    const int maxSpeedThreshold = MOTOR_MAX_SPEED;
 
-    leftSpeed = constrain(leftSpeed, -maxSpeedTreshhold, maxSpeedTreshhold);
-    rightSpeed = constrain(rightSpeed, -maxSpeedTreshhold, maxSpeedTreshhold);
+    leftSpeed = constrain(leftSpeed, -maxSpeedThreshold, maxSpeedThreshold);
+    rightSpeed = constrain(rightSpeed, -maxSpeedThreshold, maxSpeedThreshold);
 
     const int minPwmSpeed = PWMRANGE / 4;
     const int maxPwmSpeed = PWMRANGE;
 
-    if (abs(leftSpeed) < minSpeedTreshhold)
+    if (abs(leftSpeed) < minSpeedThreshold)
     {
         leftSpeed = 0;
     }
 
-    if (abs(rightSpeed) < minSpeedTreshhold)
+    if (abs(rightSpeed) < minSpeedThreshold)
     {
         rightSpeed = 0;
     }
@@ -418,7 +460,7 @@ void setMotorSpeed(int leftSpeed, int rightSpeed)
 
     if (leftSpeed)
     {
-        analogWrite(PWMA, map(abs(leftSpeed), 0, maxSpeedTreshhold, minPwmSpeed, maxPwmSpeed));
+        analogWrite(PWMA, map(abs(leftSpeed), 0, maxSpeedThreshold, minPwmSpeed, maxPwmSpeed));
     }
     else
     {
@@ -427,7 +469,7 @@ void setMotorSpeed(int leftSpeed, int rightSpeed)
 
     if (rightSpeed)
     {
-        analogWrite(PWMB, map(abs(rightSpeed), 0, maxSpeedTreshhold, minPwmSpeed, maxPwmSpeed));
+        analogWrite(PWMB, map(abs(rightSpeed), 0, maxSpeedThreshold, minPwmSpeed, maxPwmSpeed));
     }
     else
     {
@@ -437,16 +479,22 @@ void setMotorSpeed(int leftSpeed, int rightSpeed)
 
 void robot_stop()
 {
+    motor_speed_left = 0;
+    motor_speed_right = 0;
     setMotorSpeed(0, 0);
 }
 
 void robot_on()
 {
+    robot_stop();
+    last_motor_command = millis();
+    robot_powered = true;
     digitalWrite(POWER_PIN, HIGH);
 }
 
 void robot_off()
 {
     robot_stop();
+    robot_powered = false;
     digitalWrite(POWER_PIN, LOW);
 }
