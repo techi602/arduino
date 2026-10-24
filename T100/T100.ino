@@ -74,12 +74,29 @@ ESP8266WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 #endif
 
+#ifdef ESP32
+#ifndef PWMA
+#define PWMA 25
+#endif
+#ifndef PWMB
+#define PWMB 26
+#endif
+#ifndef DIRA
+#define DIRA 27
+#endif
+#ifndef DIRB
+#define DIRB 14
+#endif
+#ifndef POWER_PIN
+#define POWER_PIN 33
+#endif
+#else
 #define PWMA D6
 #define PWMB D4
 #define DIRA D7
 #define DIRB D5
-
 #define POWER_PIN D8
+#endif
 
 // speed range from -100 to +100
 int motor_speed_left = 0;
