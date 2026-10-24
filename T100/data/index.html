@@ -4,7 +4,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
     <title>T100 control center</title>
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-    <script src="/joystick.js"></script>
+    <script src="joystick.js"></script>
     <script>
         var joystickX = 0;
         var joystickY = 0;
@@ -96,7 +96,7 @@
             var protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
             websock = new WebSocket(protocol + window.location.hostname + ':81/');
             websock.onopen = function () {
-                websockSend('auth:' + document.getElementById('token').value);
+                websockSend('auth:' + window.T100_CONTROL_TOKEN);
                 console.log('websock open');
             };
             websock.onclose = function () {
@@ -121,7 +121,6 @@
 </head>
 <body>
 <form>
-    <label>Token <input type="password" id="token" autocomplete="off"></label>
     <input type="button" value="on" onclick="powerOn = true; switchPower()">
     <input type="button" value="off" onclick="powerOn = false; switchPower()">
 </form>

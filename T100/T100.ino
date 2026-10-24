@@ -280,8 +280,14 @@ void handleRoot()
         server.send(503, "text/plain", "Web UI is not installed. Upload the data filesystem first.");
         return;
     }
-    server.streamFile(page, "text/html");
+    String html = page.readString();
     page.close();
+
+    html.replace("</head>",
+                 String("<script>window.T100_CONTROL_TOKEN='") +
+                     CONTROL_TOKEN +
+                     "';</script></head>");
+    server.send(200, "text/html", html);
 }
 
 void handleJoystickJs()
