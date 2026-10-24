@@ -352,7 +352,7 @@ String IPAddress2String(IPAddress address)
         String(address[3]);
 }
 
-void setup(void)
+void initializeMotorHardware()
 {
     pinMode(DIRA, OUTPUT);
     pinMode(DIRB, OUTPUT);
@@ -377,14 +377,20 @@ void setup(void)
     digitalWrite(DIRB, LOW);
 
     digitalWrite(POWER_PIN, LOW);
+}
 
+void initializeSerial()
+{
     Serial.begin(115200);
     Serial.println();
     Serial.println();
     Serial.println();
     Serial.println("T100 booting");
+}
 
-    Wire.begin();  
+void initializeDisplay()
+{
+    Wire.begin();
 
     if (!LittleFS.begin())
     {
@@ -399,7 +405,10 @@ void setup(void)
     oled.setCursor(0, 0);
 
     oled.print("Connecting to Wi-Fi...");
-  
+}
+
+void initializeWiFi()
+{
     if (ssid[0] != '\0')
     {
         WiFiMulti.addAP(ssid, password);
@@ -459,7 +468,10 @@ void setup(void)
         oled.setCursor(0, 0);
         oled.print("Wi-Fi unavailable");
     }
+}
 
+void initializeWebServer()
+{
     server.on("/", handleRoot);
     server.on("/virtualjoystick.js", handleJoystickJs);
     server.onNotFound(handleNotFound);
@@ -468,6 +480,15 @@ void setup(void)
 
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
+}
+
+void setup(void)
+{
+    initializeMotorHardware();
+    initializeSerial();
+    initializeDisplay();
+    initializeWiFi();
+    initializeWebServer();
 }
 
 void loop()
