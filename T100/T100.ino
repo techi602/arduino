@@ -32,6 +32,7 @@
 
 #include <Arduino.h>
 #include <WebSocketsServer.h>
+#include <stdlib.h>
 #include <string.h>
 #include <Wire.h>
 #include <ACROBOTIC_SSD1306.h>
@@ -80,6 +81,50 @@ WebSocketsServer webSocket = WebSocketsServer(81);
 int motor_speed_left = 0;
 int motor_speed_right = 0;
 
+bool parseMotorCommand(const uint8_t *payload, size_t length, int &leftSpeed, int &rightSpeed)
+{
+    const size_t prefixLength = 6;
+    const size_t maxCommandLength = 32;
+
+    if (length < prefixLength || length >= maxCommandLength)
+    {
+        return false;
+    }
+
+    char command[maxCommandLength];
+    memcpy(command, payload, length);
+    command[length] = '\0';
+
+    if (strncmp(command, "motor:", prefixLength) != 0)
+    {
+        return false;
+    }
+
+    char *end;
+    long parsedLeft = strtol(command + prefixLength, &end, 10);
+    if (end == command + prefixLength || *end != ':')
+    {
+        return false;
+    }
+
+    char *rightStart = end + 1;
+    long parsedRight = strtol(rightStart, &end, 10);
+    if (end == rightStart || *end != '\0')
+    {
+        return false;
+    }
+
+    leftSpeed = constrain(parsedLeft, -100L, 100L);
+    rightSpeed = constrain(parsedRight, -100L, 100L);
+    return true;
+}
+
+bool isCommand(const uint8_t *payload, size_t length, const char *command)
+{
+    size_t commandLength = strlen(command);
+    return length == commandLength && memcmp(payload, command, commandLength) == 0;
+}
+
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 {
     Serial.printf("webSocketEvent(%d, %d, ...)\r\n", num, type);
@@ -111,32 +156,23 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         }
         case WStype_TEXT:
         {
-            Serial.printf("[%u] get Text: %s\r\n", num, payload);
+            Serial.printf("[%u] get Text length: %u\r\n", num, length);
     
             // motor:<leftspeed>:<rightspeed>
-            if (strncmp("motor", (const char *)payload, 5) == 0)
+            if (length >= 5 && memcmp(payload, "motor", 5) == 0)
             {
-                const char delim[2] = ":";
-                char *token;
-    
-                // expect "motor"
-                token = strtok((char *)payload, delim);
-    
-                // expect left speed as string
-                token = strtok(NULL, delim);
-    
-                motor_speed_left = atoi(token);
-    
-                // expect right speed as string
-                token = strtok(NULL, delim);
-    
-                motor_speed_right = atoi(token);
-    
-                setMotorSpeed(motor_speed_left, motor_speed_right);
-                Serial.print("Setting motor speed ");
-                Serial.print(motor_speed_left);
-                Serial.print(' ');
-                Serial.println(motor_speed_right);
+                if (parseMotorCommand(payload, length, motor_speed_left, motor_speed_right))
+                {
+                    setMotorSpeed(motor_speed_left, motor_speed_right);
+                    Serial.print("Setting motor speed ");
+                    Serial.print(motor_speed_left);
+                    Serial.print(' ');
+                    Serial.println(motor_speed_right);
+                }
+                else
+                {
+                    Serial.println("Invalid motor command");
+                }
 
                 // display delay too slow blocking socket IO
                 /*
@@ -150,25 +186,26 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
                 oled.putNumber(motor_speed_right);
                 */
             }
-            else if (strcmp("on", (const char *)payload) == 0)
+            else if (isCommand(payload, length, "on"))
             {
                 robot_on();
                 oled.setTextXY(0,0);
                 oled.putString("FIRE!        ");
             }
-            else if (strcmp("off", (const char *)payload) == 0)
+            else if (isCommand(payload, length, "off"))
             {
                 robot_off();
             }
     
-            else if (strcmp("stop", (const char *)payload) == 0)
+            else if (isCommand(payload, length, "stop"))
             {
                 robot_stop();
             }
             else
             {
                 Serial.print("Unknown command: ");
-                Serial.println((const char *)payload);
+                Serial.write(payload, length);
+                Serial.println();
             }
             // send data to all connected clients
             // too slow - blocking IO
@@ -323,6 +360,9 @@ void setMotorSpeed(int leftSpeed, int rightSpeed)
 {
     const int minSpeedTreshhold = 10;
     const int maxSpeedTreshhold = 100;
+
+    leftSpeed = constrain(leftSpeed, -maxSpeedTreshhold, maxSpeedTreshhold);
+    rightSpeed = constrain(rightSpeed, -maxSpeedTreshhold, maxSpeedTreshhold);
 
     const int minPwmSpeed = PWMRANGE / 4;
     const int maxPwmSpeed = PWMRANGE;
