@@ -88,6 +88,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
         case WStype_DISCONNECTED:
         {
             Serial.printf("[%u] Disconnected!\r\n", num);
+            robot_stop();
             oled.clearDisplay();
             oled.putString("Client disconnected");
             break;
@@ -370,5 +371,6 @@ void robot_on()
 
 void robot_off()
 {
+    robot_stop();
     digitalWrite(POWER_PIN, LOW);
 }
