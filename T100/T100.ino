@@ -20,6 +20,7 @@
 #include <WiFiMulti.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <LittleFS.h>
 
 #else
 
@@ -27,6 +28,7 @@
 #include <ESP8266WiFiMulti.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
+#include <LittleFS.h>
 
 #endif
 
@@ -38,8 +40,6 @@
 #include <ACROBOTIC_SSD1306.h>
 
 #include "config.h"
-#include "joystick.js.h"
-#include "control.html.h"
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -54,6 +54,7 @@ char buffer[128];
 
 #ifdef ESP32
 //MDNSResponder mdns;
+#define mdns MDNS
 WiFiMulti WiFiMulti;
 WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
@@ -273,14 +274,26 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 
 void handleRoot()
 {
-    String page = FPSTR(INDEX_HTML);
-    page.replace("__CONTROL_TOKEN__", CONTROL_TOKEN);
-    server.send(200, "text/html", page);
+    File page = LittleFS.open("/index.html", "r");
+    if (!page)
+    {
+        server.send(503, "text/plain", "Web UI is not installed. Upload the data filesystem first.");
+        return;
+    }
+    server.streamFile(page, "text/html");
+    page.close();
 }
 
 void handleJoystickJs()
 {
-    server.send_P(200, "text/javascript", JOYSTICK_JS);
+    File script = LittleFS.open("/joystick.js", "r");
+    if (!script)
+    {
+        server.send(404, "text/plain", "joystick.js is not installed");
+        return;
+    }
+    server.streamFile(script, "text/javascript");
+    script.close();
 }
 
 void handleNotFound()
@@ -318,7 +331,8 @@ void setup(void)
     pinMode(POWER_PIN, OUTPUT);
 
 #ifdef ESP32
-    analogWriteResolution(10);
+    analogWriteResolution(PWMA, 10);
+    analogWriteResolution(PWMB, 10);
     analogWriteFrequency(PWMA, 1000);
     analogWriteFrequency(PWMB, 1000);
 #else
@@ -342,6 +356,11 @@ void setup(void)
 
     Wire.begin();  
 
+    if (!LittleFS.begin())
+    {
+        Serial.println("LittleFS mount failed");
+    }
+
     // Initialze SSD1306 OLED display
     oled.init();
     oled.clearDisplay();
@@ -354,7 +373,7 @@ void setup(void)
         WiFiMulti.addAP(ssid, password);
     }
 
-    const unsigned long wifiTimeout = WIFI_CONNECT_TIMEOUT_MS;
+    const unsigned long wifiTimeout = T100_WIFI_CONNECT_TIMEOUT_MS;
     unsigned long wifiStart = millis();
     while (WiFiMulti.run() != WL_CONNECTED && millis() - wifiStart < wifiTimeout)
     {
@@ -378,7 +397,11 @@ void setup(void)
         oled.setTextXY(2, 0);
         oled.putString(IPAddress2String(WiFi.localIP()));
 
+#ifdef ESP32
+        if (mdns.begin(DEVICE_HOSTNAME))
+#else
         if (mdns.begin(DEVICE_HOSTNAME, WiFi.localIP()))
+#endif
         {
             Serial.println("MDNS responder started");
             mdns.addService("http", "tcp", 80);

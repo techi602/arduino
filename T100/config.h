@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef PWMRANGE
+#define PWMRANGE 1023
+#endif
+
 // Copy these values into a local secrets.h file for a private network.
 #if defined(__has_include)
 #if __has_include("secrets.h")
@@ -58,5 +62,5 @@
 #define MOTOR_MIN_SPEED 10
 #define MOTOR_MAX_SPEED 100
 #define MOTOR_COMMAND_TIMEOUT_MS 500UL
-#define WIFI_CONNECT_TIMEOUT_MS 15000UL
+#define T100_WIFI_CONNECT_TIMEOUT_MS 15000UL
 #define DEVICE_HOSTNAME "t100"
