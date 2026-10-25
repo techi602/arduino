@@ -1,10 +1,10 @@
 # Arduino UNO Weather Clock
 
-Sketch pro Arduino UNO, LCD 2004A s I2C backpackem, GY-68 BMP180, ZS-042 RTC (DS3231) a kapacitní dotykový modul (typicky TTP223).
+Sketch for an Arduino UNO, a 2004A LCD with an I2C backpack, a GY-68 BMP180, a ZS-042 RTC (DS3231), and a capacitive touch module (typically TTP223).
 
 ## Wiring
 
-Všechny moduly sdílejí jednu I2C sběrnici:
+All modules share one I2C bus:
 
 | Arduino UNO | LCD 2004A | GY-68 BMP180 | ZS-042 |
 |---|---|---|---|
@@ -12,9 +12,9 @@ Všechny moduly sdílejí jednu I2C sběrnici:
 | `GND` | `GND` | `GND` | `GND` |
 | `A4 (SDA)` | `SDA` | `SDA` | `SDA` |
 | `A5 (SCL)` | `SCL` | `SCL` | `SCL` |
-| `D2` | — | — | kapacitní modul `OUT` |
+| `D2` | — | — | capacitive module `OUT` |
 
-### Schéma zapojení
+### Wiring diagram
 
 ```text
                          +-- LCD 2004A I2C backpack
@@ -28,38 +28,38 @@ Arduino UNO              |      GND -> GND
    |      SDA -----------+      GND -> GND
    |      SCL -----------+      SDA -> A4/SDA
    |                             SCL -> A5/SCL
-  GND -------------------------- GND (společná zem)
+  GND -------------------------- GND (common ground)
 
-  D2  <-------------------------- OUT kapacitního modulu (TTP223)
-  5V  --------------------------- VCC kapacitního modulu
-  GND --------------------------- GND kapacitního modulu
+  D2  <-------------------------- OUT capacitive module (TTP223)
+  5V  --------------------------- VCC capacitive module
+  GND --------------------------- GND capacitive module
 ```
 
-`A4/SDA` a `A5/SCL` jsou společné vodiče: všechny tři I2C moduly se připojují paralelně, nikoli za sebou. Vodiče `SDA` a `SCL` nepřipojujte na `D2`.
+`A4/SDA` and `A5/SCL` are shared signals: all three I2C modules are connected in parallel, not in series. Do not connect the `SDA` or `SCL` wires to `D2`.
 
-Kapacitní modul zapojte jako běžný digitální vstup: `VCC` na `5V`, `GND` na `GND` a `OUT` na `D2`. Toto zapojení předpokládá běžný modul `TTP223` s aktivním výstupem `HIGH`. Pokud máte jiný senzor nebo aktivní `LOW` výstup, je nutné upravit `TOUCH_PIN`/logiku ve sketchi.
+Connect the capacitive module as a normal digital input: `VCC` to `5V`, `GND` to `GND`, and `OUT` to `D2`. This wiring assumes a typical `TTP223` module with an active-`HIGH` output. If you have a different sensor or an active-`LOW` output, adjust `TOUCH_PIN` and the input logic in the sketch.
 
-Dotyk na modulu přepíná podsvit LCD. LCD backpack není vhodné použít jako vstup pro dotykový senzor: jeho I2C expander ovládá LCD a přímé spojení výstupu `OUT` s jeho piny může způsobit konflikt. Podsvit proto řídí firmware přes stejnou knihovnu jako dosud. Externí LED lze připojit pouze přes vhodný rezistor a samostatný výstup, ne přímo na I2C `SDA/SCL`.
+Touching the module toggles the LCD backlight. The LCD backpack should not be used as an input for the touch sensor: its I2C expander controls the LCD, and directly connecting the `OUT` signal to its pins can cause a conflict. The firmware therefore controls the backlight through the same library as the LCD. An external LED may only be connected through a suitable resistor and a separate output, never directly to the I2C `SDA/SCL` lines.
 
-### Proč jsou na UNO současně `A4/A5` a `SDA/SCL`
+### Why the UNO has both `A4/A5` and `SDA/SCL`
 
-Na Arduino UNO R3 jsou horní konektory `SDA` a `SCL` elektricky vyvedením stejných signálů jako `A4` a `A5`: `SDA = A4`, `SCL = A5`. Nejde o další GPIO ani o dvě oddělené sběrnice. Použijte jednu dvojici, nepropojujte je mezi sebou; všechny I2C moduly se připojují paralelně na stejné `SDA`, `SCL`, `5V` a `GND`.
+On an Arduino UNO R3, the top `SDA` and `SCL` connectors carry the same signals as `A4` and `A5`: `SDA = A4`, `SCL = A5`. They are not additional GPIO pins or two separate buses. Use either connector pair and do not bridge the pairs together; all I2C modules connect in parallel to the same `SDA`, `SCL`, `5V`, and `GND`.
 
-`*` U BMP180 ověřte napájecí napětí konkrétní destičky. Některé GY-68 mají regulátor a 5V vstup, holý BMP180 vyžaduje 3.3V. Pokud modul nemá převod úrovní, použijte 3.3V a level shifter pro I2C. RTC ZS-042 se běžně napájí 5V.
+`*` Check the required supply voltage for your specific BMP180 board. Some GY-68 boards include a regulator and accept 5V, while a bare BMP180 requires 3.3V. If the module has no level shifting, use 3.3V and an I2C level shifter. The ZS-042 RTC is commonly powered from 5V.
 
-Typické I2C adresy jsou LCD `0x27` (někdy `0x3F`), BMP180 `0x77` a DS3231 `0x68`. Pokud LCD používá `0x3F`, změňte `LCD_ADDRESS` v `clock.ino`.
+Typical I2C addresses are LCD `0x27` (sometimes `0x3F`), BMP180 `0x77`, and DS3231 `0x68`. If the LCD uses `0x3F`, change `LCD_ADDRESS` in `clock.ino`.
 
-## Instalace a nahrání
+## Installation and upload
 
-V Arduino IDE nainstalujte knihovny:
+In the Arduino IDE, install these libraries:
 
 - `RTClib` od Adafruit
 - `Adafruit BMP085 Library` (obsahuje podporu BMP180)
 - `LiquidCrystal_I2C` (varianta s API `init()`)
 
-Vyberte **Arduino UNO**, nahrajte `clock.ino` a otevřete Serial Monitor na `9600 baud`, ideálně s koncem řádku `Newline` nebo `Both NL & CR`.
+Select **Arduino UNO**, upload `clock.ino`, and open the Serial Monitor at `9600 baud`, preferably with the line ending set to `Newline` or `Both NL & CR`.
 
-## Serial příkazy
+## Serial commands
 
 ```text
 HELP
@@ -76,32 +76,32 @@ SETTIME 2026-10-25 22:34:00
 SYNC 2026-10-25 22:34:00
 ```
 
-`SETTIME` i `SYNC` nastaví RTC. Firmware čas z počítače sám nezíská; hostitelský program nebo uživatel proto musí poslat timestamp v uvedeném formátu. `SCAN` vypíše všechny odpovídající I2C adresy, takže lze ověřit skutečné adresy modulů bez nového nahrávání sketchu.
+Both `SETTIME` and `SYNC` set the RTC. The firmware cannot obtain the computer's time automatically, so the user or a host program must send a timestamp in the format shown above. `SCAN` lists all responding I2C addresses, allowing you to verify the actual module addresses without uploading the sketch again.
 
-LCD zobrazuje čas, datum, teplotu a tlak současně. Hodnoty se při `REPORT ON` vypisují na Serial každých 10 sekund.
+The LCD displays the time, date, temperature, and pressure simultaneously. When `REPORT ON` is enabled, readings are printed to Serial every 10 seconds.
 
-`BACKLIGHT ON/OFF` ručně nastaví podsvit LCD. `TOUCH ON/OFF` zapíná nebo vypíná automatické přepínání podsvitu dotykem. Pin `D2` není součástí I2C sběrnice; `A4/A5` zůstávají vyhrazené pro `SDA/SCL`.
+`BACKLIGHT ON/OFF` manually controls the LCD backlight. `TOUCH ON/OFF` enables or disables automatic backlight toggling through touch. Pin `D2` is not part of the I2C bus; `A4/A5` remain dedicated to `SDA/SCL`.
 
-LCD používá jeden pevný pohled. Řádky se nerotují a firmware nepoužívá `lcd.clear()`, takže displej nebliká:
+The LCD uses one fixed view. The rows do not rotate, and the firmware does not use `lcd.clear()`, so the display does not flicker:
 
 ```text
-Arduino Weather       (nebo vlastní text)
+Arduino Weather       (or custom text)
 Time: HH:MM:SS YYYY-MM-DD
 Temp: xx.x C
 Press: xxxx.x hPa
 ```
 
-Firmware aktualizuje jen řádek, jehož hodnota se změnila. Diagnostika zařízení zůstává dostupná příkazem `STATUS` přes Serial.
+The firmware updates only rows whose values have changed. Device diagnostics remain available through the `STATUS` Serial command.
 
-### Vlastní první řádek
+### Custom first row
 
-První řádek lze změnit přes Serial (text se zkrátí na 20 znaků):
+The first row can be changed through Serial (text is truncated to 20 characters):
 
 ```text
 LCDLINE FIRST Ahoj Arduino!
 LCDLINE FIRST
 ```
 
-Prázdný příkaz vrátí první řádek k textu `Arduino Weather`. Stav zařízení a diagnostické informace se zobrazí v Serial Monitoru po příkazu `STATUS`; LCD zůstává vyhrazené pro čas, teplotu a tlak.
+An empty command restores the first row to `Arduino Weather`. Device status and diagnostic information are shown in the Serial Monitor after the `STATUS` command; the LCD remains reserved for time, temperature, and pressure.
 
-Pokud Serial potvrdí `LCD backlight ON`, ale LED fyzicky nesvítí, příkaz funguje pouze na úrovni I2C backpacku. Zkontrolujte trimr kontrastu, napájení `VCC/GND`, pájený jumper `LED/BL` na backpacku a samotné LED podsvícení LCD; některé moduly mají podsvit řešený pouze jumperem nebo vadný tranzistor. `BACKLIGHT ON` neopraví přerušený obvod LED.
+If Serial confirms `LCD backlight ON` but the LED does not physically light up, the command is working only at the I2C backpack level. Check the contrast trimmer, `VCC/GND` power, the soldered `LED/BL` jumper on the backpack, and the LCD backlight itself; some modules use a jumper-only backlight circuit or have a faulty transistor. `BACKLIGHT ON` cannot repair an open LED circuit.
