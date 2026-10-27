@@ -87,7 +87,8 @@ static esp_err_t stream_handler(httpd_req_t *request) {
     if (result != ESP_OK) {
       return result;
     }
-    vTaskDelay(pdMS_TO_TICKS(30));
+    // Do not add an artificial delay here. With grab mode set to
+    // CAMERA_GRAB_LATEST, the next frame is always the newest available one.
   }
 }
 
@@ -217,9 +218,9 @@ void setup() {
   config.pixel_format = PIXFORMAT_JPEG;
   config.frame_size = has_psram ? FRAMESIZE_VGA : FRAMESIZE_QVGA;
   config.jpeg_quality = 12;
-  config.fb_count = 1;
+  config.fb_count = has_psram ? 2 : 1;
   config.fb_location = has_psram ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  config.grab_mode = has_psram ? CAMERA_GRAB_LATEST : CAMERA_GRAB_WHEN_EMPTY;
 
   if (esp_camera_init(&config) != ESP_OK) {
     Serial.println("Camera initialization failed");
