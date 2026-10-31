@@ -464,13 +464,32 @@ void setupNtp() {
   ntpConfigured = true;
 }
 
+bool pragueDaylightTime(time_t epoch) {
+  struct tm utc;
+  gmtime_r(&epoch, &utc);
+  if (utc.tm_mon < 2 || utc.tm_mon > 9) return false;
+  if (utc.tm_mon > 2 && utc.tm_mon < 9) return true;
+
+  const uint8_t month = utc.tm_mon + 1;
+  const uint8_t lastDay = 31;
+  const DateTime lastDayOfMonth(utc.tm_year + 1900, month, lastDay, 0, 0, 0);
+  const uint8_t transitionDay = lastDay - lastDayOfMonth.dayOfTheWeek();
+  if (month == 3) {
+    return utc.tm_mday > transitionDay ||
+           (utc.tm_mday == transitionDay && utc.tm_hour >= 1);
+  }
+  return utc.tm_mday < transitionDay ||
+         (utc.tm_mday == transitionDay && utc.tm_hour < 1);
+}
+
 bool syncRtcFromNtp() {
   setupNtp();
   lastNtpAttempt = millis();
   time_t epoch = time(nullptr);
   if (epoch < 1700000000) return false;
+  const time_t localEpoch = epoch + (pragueDaylightTime(epoch) ? 7200 : 3600);
   struct tm local;
-  localtime_r(&epoch, &local);
+  gmtime_r(&localEpoch, &local);
   rtc.adjust(DateTime(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
                       local.tm_hour, local.tm_min, local.tm_sec));
   lastNtpSync = millis();
@@ -576,7 +595,8 @@ void drawDisplay() {
     const int16_t degreeX = display.getCursorX();
     drawDegreeSymbol(degreeX, 40);
     display.setCursor(degreeX + 4, 40); display.print('C');
-    drawHumidityIcon(48, 40); display.setCursor(58, 40); display.print(humidity, 0); display.print('%');
+    display.setCursor(48, 40); display.print(humidity, 0); display.print('%');
+    drawHumidityIcon(display.getCursorX(), 40);
   } else if (displayPage == 1) {
     display.setCursor(0, 0); display.println(F("SENSOR DATA"));
     display.print(F("Temp: ")); display.print(temperatureC, 1); display.println(F(" C"));
