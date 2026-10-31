@@ -51,8 +51,8 @@ The HTTP API is also available for integrations:
 |---|---|---|
 | `GET` | `/` | Open the dashboard |
 | `GET` | `/api/data` | Return current readings as JSON |
-| `POST` | `/api/light/on` | Switch D0 HIGH |
-| `POST` | `/api/light/off` | Switch D0 LOW |
+| `POST` | `/api/light/on` | Switch D0 ON (active-low, drives LOW) |
+| `POST` | `/api/light/off` | Switch D0 OFF (active-low, drives HIGH) |
 
 The web server is only reachable from the local network. Do not expose the ESP8266 directly to the Internet; the endpoints intentionally have no authentication.
 
@@ -74,9 +74,9 @@ Commands are case-insensitive and end with Enter:
 | `PAGE 0`, `PAGE 1`, `PAGE 2` | Select clock, weather, or diagnostics page |
 | `FORECAST` | Show pressure trend, comfort, dew point, and feels-like temperature |
 | `WEATHER` | Refresh and print the configured location's internet weather status |
-| `LIGHT ON`, `LIGHT OFF` | Set the D0 light-driver output HIGH or LOW |
+| `LIGHT ON`, `LIGHT OFF` | Set the active-low D0 light-driver output on or off |
 
-`JSON` also includes `dew_point_c`, `heat_index_c`, `comfort`, `pressure_trend`, `ip`, `internet_location`, `internet_weather`, `internet_temperature_c`, `internet_humidity_pct`, `internet_apparent_c`, `internet_wind_kmh`, `sunrise`, and `sunset`. Internet values are cached and set to `null` until a successful refresh; sunrise and sunset are empty until the first successful weather refresh. The pressure trend is only a simple local indicator: rising pressure often suggests clearing weather and falling pressure often suggests unsettled weather. NTP is received in UTC, then converted explicitly to Prague time before it is stored in the RTC: UTC+1 in winter and UTC+2 during European daylight saving time. `TZ_INFO` remains configurable for the system timezone, but the RTC conversion currently targets Central Europe.
+`JSON` also includes `dew_point_c`, `heat_index_c`, `comfort`, `pressure_trend`, `ip`, `internet_location`, `internet_weather`, `internet_temperature_c`, `internet_humidity_pct`, `internet_apparent_c`, `internet_wind_kmh`, `sunrise`, and `sunset`. Unavailable local and internet numeric values are emitted as JSON `null`; internet data is marked unavailable after 30 minutes without a successful refresh. Sunrise and sunset are empty until the first successful weather refresh. The pressure trend is only a simple local indicator: rising pressure often suggests clearing weather and falling pressure often suggests unsettled weather. NTP is received in UTC and converted using the configured `TZ_INFO` timezone before it is stored in the RTC.
 
 `A0` is not used by the firmware because no light sensor is connected. `D0` is a digital output for the light driver and starts ON after boot. The connected driver is active-low: `LIGHT ON` drives D0 LOW and `LIGHT OFF` drives D0 HIGH. Connect D0 to a transistor/MOSFET or a suitable relay-module input; do not connect a lamp or other high-current load directly to the ESP8266 pin. Use an external supply and common ground, and add a flyback diode for a bare relay coil.
 

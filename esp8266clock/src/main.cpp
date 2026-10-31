@@ -33,6 +33,7 @@ constexpr uint32_t PRESSURE_TREND_INTERVAL_MS = 900000;
 constexpr uint32_t NTP_SYNC_INTERVAL_MS = 21600000;
 constexpr uint32_t NTP_RETRY_INTERVAL_MS = 30000;
 constexpr uint32_t INTERNET_WEATHER_INTERVAL_MS = 900000;
+constexpr uint32_t INTERNET_WEATHER_STALE_MS = 1800000;
 constexpr uint8_t I2C_ADDRESS_BME280 = 0x76;
 constexpr uint16_t WEB_SERVER_PORT = 80;
 constexpr char MDNS_HOSTNAME[] = "weather-clock";
@@ -57,6 +58,7 @@ uint32_t lastNtpSync = 0;
 uint32_t lastNtpAttempt = 0;
 uint32_t lastPressureTrend = 0;
 uint32_t lastInternetWeather = 0;
+uint32_t lastInternetWeatherSuccess = 0;
 uint32_t bootDisplayStart = 0;
 bool startupDisplayActive = true;
 String serialLine;
@@ -237,25 +239,37 @@ String uptimeString() {
   return String(text);
 }
 
+void appendJsonNumber(String &json, float value, uint8_t decimals) {
+  if (isfinite(value)) json += String(value, decimals);
+  else json += F("null");
+}
+
+void expireStaleInternetWeather() {
+  if (internetWeatherOk && lastInternetWeatherSuccess != 0 &&
+      millis() - lastInternetWeatherSuccess >= INTERNET_WEATHER_STALE_MS) {
+    internetWeatherOk = false;
+  }
+}
+
 String webMeasurementsJson() {
   DateTime now = rtcOk ? rtc.now() : DateTime(2000, 1, 1, 0, 0, 0);
   String json = F("{\"time\":\"");
   json += dateTimeString(now);
-  json += F("\",\"temperature_c\":"); json += String(temperatureC, 2);
-  json += F(" ,\"humidity_pct\":"); json += String(humidity, 2);
-  json += F(" ,\"pressure_hpa\":"); json += String(pressureHpa, 2);
-  json += F(" ,\"dew_point_c\":"); json += String(dewPointC(), 2);
-  json += F(" ,\"heat_index_c\":"); json += String(heatIndexC(), 2);
+  json += F("\",\"temperature_c\":"); appendJsonNumber(json, temperatureC, 2);
+  json += F(" ,\"humidity_pct\":"); appendJsonNumber(json, humidity, 2);
+  json += F(" ,\"pressure_hpa\":"); appendJsonNumber(json, pressureHpa, 2);
+  json += F(" ,\"dew_point_c\":"); appendJsonNumber(json, dewPointC(), 2);
+  json += F(" ,\"heat_index_c\":"); appendJsonNumber(json, heatIndexC(), 2);
   json += F(" ,\"comfort\":\""); json += comfortLabel(); json += F("\"");
   json += F(" ,\"pressure_trend\":\""); json += pressureTrendLabel(); json += F("\"");
   json += F(" ,\"internet_location\":\""); json += WEATHER_LOCATION; json += F("\"");
   json += F(" ,\"internet_weather_ok\":"); json += internetWeatherOk ? F("true") : F("false");
   json += F(" ,\"internet_weather\":\""); json += internetWeatherLabel(); json += F("\"");
-  json += F(" ,\"internet_temperature_c\":"); json += internetWeatherOk ? String(internetTemperatureC, 2) : F("null");
-  json += F(" ,\"internet_humidity_pct\":"); json += internetWeatherOk ? String(internetHumidity, 1) : F("null");
-  json += F(" ,\"internet_apparent_c\":"); json += internetWeatherOk ? String(internetApparentC, 2) : F("null");
-  json += F(" ,\"internet_rain_mm\":"); json += internetWeatherOk ? String(internetRainMm, 1) : F("null");
-  json += F(" ,\"internet_wind_kmh\":"); json += internetWeatherOk ? String(internetWindKmh, 1) : F("null");
+  json += F(" ,\"internet_temperature_c\":"); appendJsonNumber(json, internetWeatherOk ? internetTemperatureC : NAN, 2);
+  json += F(" ,\"internet_humidity_pct\":"); appendJsonNumber(json, internetWeatherOk ? internetHumidity : NAN, 1);
+  json += F(" ,\"internet_apparent_c\":"); appendJsonNumber(json, internetWeatherOk ? internetApparentC : NAN, 2);
+  json += F(" ,\"internet_rain_mm\":"); appendJsonNumber(json, internetWeatherOk ? internetRainMm : NAN, 1);
+  json += F(" ,\"internet_wind_kmh\":"); appendJsonNumber(json, internetWeatherOk ? internetWindKmh : NAN, 1);
   json += F(" ,\"sunrise\":\""); json += sunriseTime; json += F("\"");
   json += F(" ,\"sunset\":\""); json += sunsetTime; json += F("\"");
   json += F(" ,\"light_on\":"); json += lightOn ? F("true") : F("false");
@@ -344,6 +358,7 @@ void fetchInternetWeather() {
       internetWindKmh = current["wind_speed_10m"] | NAN;
       internetWeatherCode = current["weather_code"] | -1;
       internetWeatherOk = isfinite(internetTemperatureC);
+      if (internetWeatherOk) lastInternetWeatherSuccess = millis();
       JsonArray sunrise = document["daily"]["sunrise"];
       JsonArray sunset = document["daily"]["sunset"];
       if (!sunrise.isNull() && sunrise.size() > 0) sunriseTime = sunrise[0].as<const char *>();
@@ -353,6 +368,7 @@ void fetchInternetWeather() {
     }
   }
   http.end();
+  expireStaleInternetWeather();
 }
 
 void updatePressureTrend(uint32_t now) {
@@ -366,34 +382,7 @@ void updatePressureTrend(uint32_t now) {
 void printMeasurements(bool json = false) {
   DateTime now = rtcOk ? rtc.now() : DateTime(2000, 1, 1, 0, 0, 0);
   if (json) {
-    Serial.print(F("{\"time\":\"")); Serial.print(dateTimeString(now));
-    Serial.print(F("\",\"temperature_c\":")); Serial.print(temperatureC, 2);
-    Serial.print(F(",\"humidity_pct\":")); Serial.print(humidity, 2);
-    Serial.print(F(",\"pressure_hpa\":")); Serial.print(pressureHpa, 2);
-    Serial.print(F(",\"dew_point_c\":")); Serial.print(dewPointC(), 2);
-    Serial.print(F(",\"heat_index_c\":")); Serial.print(heatIndexC(), 2);
-    Serial.print(F(",\"comfort\":\"")); Serial.print(comfortLabel()); Serial.print('"');
-    Serial.print(F(",\"pressure_trend\":\"")); Serial.print(pressureTrendLabel()); Serial.print('"');
-    Serial.print(F(",\"internet_location\":\"")); Serial.print(WEATHER_LOCATION); Serial.print(F("\",\"internet_weather_ok\":"));
-    Serial.print(internetWeatherOk ? F("true") : F("false"));
-    Serial.print(F(",\"internet_weather\":\"")); Serial.print(internetWeatherLabel()); Serial.print('"');
-    Serial.print(F(",\"internet_temperature_c\":"));
-    if (internetWeatherOk) Serial.print(internetTemperatureC, 2); else Serial.print(F("null"));
-    Serial.print(F(",\"internet_humidity_pct\":"));
-    if (internetWeatherOk) Serial.print(internetHumidity, 1); else Serial.print(F("null"));
-    Serial.print(F(",\"internet_apparent_c\":"));
-    if (internetWeatherOk) Serial.print(internetApparentC, 2); else Serial.print(F("null"));
-    Serial.print(F(",\"internet_rain_mm\":"));
-    if (internetWeatherOk) Serial.print(internetRainMm, 1); else Serial.print(F("null"));
-    Serial.print(F(",\"internet_wind_kmh\":"));
-    if (internetWeatherOk) Serial.print(internetWindKmh, 1); else Serial.print(F("null"));
-    Serial.print(F(",\"sunrise\":\"")); Serial.print(sunriseTime); Serial.print(F("\",\"sunset\":\"")); Serial.print(sunsetTime); Serial.print('"');
-    Serial.print(F(",\"light_on\":")); Serial.print(lightOn ? F("true") : F("false"));
-    Serial.print(F(",\"ip\":\""));
-    if (WiFi.status() == WL_CONNECTED) Serial.print(WiFi.localIP());
-    else Serial.print(F("disconnected"));
-    Serial.print('"');
-    Serial.println('}');
+    Serial.println(webMeasurementsJson());
     return;
   }
   Serial.print(F("Time: ")); Serial.println(dateTimeString(now));
@@ -465,34 +454,13 @@ void setupNtp() {
   ntpConfigured = true;
 }
 
-bool pragueDaylightTime(time_t epoch) {
-  struct tm utc;
-  gmtime_r(&epoch, &utc);
-  if (utc.tm_mon < 2 || utc.tm_mon > 9) return utc.tm_mon > 2 && utc.tm_mon < 9;
-  if (utc.tm_mon > 2 && utc.tm_mon < 9) return true;
-
-  const uint8_t daysInMarch = 31;
-  const uint8_t daysInOctober = 31;
-  const uint8_t month = utc.tm_mon + 1;
-  const uint8_t daysInMonth = month == 3 ? daysInMarch : daysInOctober;
-  DateTime lastSunday(utc.tm_year + 1900, month, daysInMonth, 0, 0, 0);
-  const uint8_t transitionDay = daysInMonth - lastSunday.dayOfTheWeek();
-  if (month == 3) {
-    if (utc.tm_mday != transitionDay) return utc.tm_mday > transitionDay;
-    return utc.tm_hour >= 1;
-  }
-  if (utc.tm_mday != transitionDay) return utc.tm_mday < transitionDay;
-  return utc.tm_hour < 1;
-}
-
 bool syncRtcFromNtp() {
   setupNtp();
   lastNtpAttempt = millis();
   time_t epoch = time(nullptr);
   if (epoch < 1700000000) return false;
-  const time_t pragueEpoch = epoch + (pragueDaylightTime(epoch) ? 7200 : 3600);
   struct tm local;
-  gmtime_r(&pragueEpoch, &local);
+  localtime_r(&epoch, &local);
   rtc.adjust(DateTime(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
                       local.tm_hour, local.tm_min, local.tm_sec));
   lastNtpSync = millis();
@@ -503,7 +471,10 @@ bool parseDateTime(const String &input, DateTime &result) {
   int year, month, day, hour, minute, second;
   if (sscanf(input.c_str(), "%d-%d-%d %d:%d:%d", &year, &month, &day,
              &hour, &minute, &second) != 6) return false;
-  if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31 ||
+  const uint8_t daysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const bool leapYear = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+  const int maximumDay = month == 2 && leapYear ? 29 : (month >= 1 && month <= 12 ? daysInMonth[month - 1] : 0);
+  if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1 || day > maximumDay ||
       hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return false;
   result = DateTime(year, month, day, hour, minute, second);
   return result.isValid();
@@ -651,6 +622,7 @@ void loop() {
     else if (serialLine.length() < 80) serialLine += character;
   }
   webServer.handleClient();
+  expireStaleInternetWeather();
   uint32_t now = millis();
   if (now - lastSensorRead >= SENSOR_INTERVAL_MS) { lastSensorRead = now; readSensors(); updatePressureTrend(now); }
   if (startupDisplayActive) {
