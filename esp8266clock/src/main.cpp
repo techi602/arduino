@@ -3,7 +3,10 @@
 #include <Wire.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
+#include <ESP8266mDNS.h>
 #include <time.h>
+#include <ArduinoJson.h>
 #include <Adafruit_BME280.h>
 #include <RTClib.h>
 #include <Adafruit_GFX.h>
@@ -23,13 +26,16 @@ constexpr uint8_t LIGHT_OFF_LEVEL = HIGH;
 
 constexpr uint32_t SENSOR_INTERVAL_MS = 5000;
 constexpr uint32_t DISPLAY_INTERVAL_MS = 7000;
-constexpr uint32_t BOOT_DIAGNOSTICS_MS = 5000;
+constexpr uint32_t BOOT_DIAGNOSTICS_MS = 15000;
 constexpr uint32_t BOOT_SENSOR_DATA_MS = 5000;
+constexpr uint32_t BOOT_DISPLAY_REFRESH_MS = 1000;
 constexpr uint32_t PRESSURE_TREND_INTERVAL_MS = 900000;
 constexpr uint32_t NTP_SYNC_INTERVAL_MS = 21600000;
 constexpr uint32_t NTP_RETRY_INTERVAL_MS = 30000;
+constexpr uint32_t INTERNET_WEATHER_INTERVAL_MS = 900000;
 constexpr uint8_t I2C_ADDRESS_BME280 = 0x76;
 constexpr uint16_t WEB_SERVER_PORT = 80;
+constexpr char MDNS_HOSTNAME[] = "weather-clock";
 
 Adafruit_BME280 bme;
 RTC_DS3231 rtc;
@@ -39,15 +45,18 @@ ESP8266WebServer webServer(WEB_SERVER_PORT);
 bool rtcOk = false;
 bool bmeOk = false;
 bool wifiRequested = false;
+bool mdnsStarted = false;
 bool ntpConfigured = false;
 bool lightOn = false;
 uint8_t displayPage = 0;
+uint8_t clockInfoPage = 0;
 uint32_t lastSensorRead = 0;
 uint32_t lastDisplayUpdate = 0;
 uint32_t lastWifiAttempt = 0;
 uint32_t lastNtpSync = 0;
 uint32_t lastNtpAttempt = 0;
 uint32_t lastPressureTrend = 0;
+uint32_t lastInternetWeather = 0;
 uint32_t bootDisplayStart = 0;
 bool startupDisplayActive = true;
 String serialLine;
@@ -68,10 +77,16 @@ small{color:#52636b}#message{min-height:1.3em}
 <div class="card">Dew point<div class="value"><span id="dew">--</span> °C</div></div>
 <div class="card">Feels like<div class="value"><span id="feels">--</span> °C</div></div>
 <div class="card">Comfort<div class="value" id="comfort">--</div></div></div>
+<h2>Internet · <span id="remoteLocation">--</span></h2><div class="grid"><div class="card">Remote weather<div class="value" id="remoteWeather">--</div></div>
+<div class="card">Remote temperature<div class="value"><span id="remoteTemperature">--</span> °C</div></div>
+<div class="card">Remote rain<div class="value"><span id="remoteRain">--</span> mm</div></div>
+<div class="card">Remote wind<div class="value"><span id="remoteWind">--</span> km/h</div></div>
+<div class="card">Sunrise<div class="value" id="sunrise">--</div></div>
+<div class="card">Sunset<div class="value" id="sunset">--</div></div></div>
 <div class="buttons"><button id="on" onclick="setLight('on')">Light ON</button><button id="off" onclick="setLight('off')">Light OFF</button></div>
 <p>Light output: <strong id="lightState">--</strong> (D0)</p><p><small>Pressure trend: <span id="trend">--</span> · Uptime: <span id="uptime">--</span></small></p>
 </main><script>
-const $=id=>document.getElementById(id);function show(v){$('time').textContent=v.time;$('temperature').textContent=Number(v.temperature_c).toFixed(1);$('humidity').textContent=Number(v.humidity_pct).toFixed(1);$('pressure').textContent=Number(v.pressure_hpa).toFixed(1);$('dew').textContent=Number(v.dew_point_c).toFixed(1);$('feels').textContent=Number(v.heat_index_c).toFixed(1);$('comfort').textContent=v.comfort;$('lightState').textContent=v.light_on?'ON':'OFF';$('trend').textContent=v.pressure_trend;$('uptime').textContent=v.uptime;}
+const $=id=>document.getElementById(id);function show(v){$('time').textContent=v.time;$('temperature').textContent=Number(v.temperature_c).toFixed(1);$('humidity').textContent=Number(v.humidity_pct).toFixed(1);$('pressure').textContent=Number(v.pressure_hpa).toFixed(1);$('dew').textContent=Number(v.dew_point_c).toFixed(1);$('feels').textContent=Number(v.heat_index_c).toFixed(1);$('comfort').textContent=v.comfort;$('remoteLocation').textContent=v.internet_location;$('remoteWeather').textContent=v.internet_weather;$('remoteTemperature').textContent=v.internet_weather_ok?Number(v.internet_temperature_c).toFixed(1):'--';$('remoteRain').textContent=v.internet_weather_ok?Number(v.internet_rain_mm).toFixed(1):'--';$('remoteWind').textContent=v.internet_weather_ok?Number(v.internet_wind_kmh).toFixed(1):'--';$('sunrise').textContent=v.sunrise||'--';$('sunset').textContent=v.sunset||'--';$('lightState').textContent=v.light_on?'ON':'OFF';$('trend').textContent=v.pressure_trend;$('uptime').textContent=v.uptime;}
 async function refresh(){try{const r=await fetch('/api/data');if(!r.ok)throw Error();show(await r.json());$('message').textContent='Live data · refreshed '+new Date().toLocaleTimeString()}catch(e){$('message').textContent='Device data unavailable'}}
 async function setLight(state){try{const r=await fetch('/api/light/'+state,{method:'POST'});const v=await r.json();show(v);$('message').textContent='Light switched '+state.toUpperCase()}catch(e){$('message').textContent='Could not switch light'}}refresh();setInterval(refresh,5000);
 </script></body></html>)HTML";
@@ -82,6 +97,15 @@ float pressureHpa = NAN;
 float pressureReferenceHpa = NAN;
 float minTemperature = INFINITY;
 float maxTemperature = -INFINITY;
+float internetTemperatureC = NAN;
+float internetHumidity = NAN;
+float internetApparentC = NAN;
+float internetRainMm = NAN;
+float internetWindKmh = NAN;
+int internetWeatherCode = -1;
+bool internetWeatherOk = false;
+String sunriseTime;
+String sunsetTime;
 
 float dewPointC() {
   if (!isfinite(temperatureC) || !isfinite(humidity) || humidity <= 0.0F) return NAN;
@@ -99,6 +123,76 @@ float heatIndexC() {
                        + 0.00085282F * tempF * humidity * humidity
                        - 0.00000199F * tempF * tempF * humidity * humidity;
   return (indexF - 32.0F) * 5.0F / 9.0F;
+}
+
+const __FlashStringHelper *internetWeatherLabel() {
+  switch (internetWeatherCode) {
+    case 0: return F("clear");
+    case 1: case 2: return F("partly cloudy");
+    case 3: return F("overcast");
+    case 45: case 48: return F("fog");
+    case 51: case 53: case 55: case 56: case 57: return F("drizzle");
+    case 61: case 63: case 65: case 66: case 67: return F("rain");
+    case 71: case 73: case 75: case 77: return F("snow");
+    case 80: case 81: case 82: return F("showers");
+    case 85: case 86: return F("snow showers");
+    case 95: case 96: case 99: return F("thunderstorm");
+    default: return F("unknown");
+  }
+}
+
+void drawWeatherIcon(int16_t x, int16_t y) {
+  if (!internetWeatherOk || internetWeatherCode < 0) {
+    display.drawRect(x + 2, y + 2, 12, 12, BLACK);
+    display.drawLine(x + 5, y + 5, x + 10, y + 10, BLACK);
+    display.drawLine(x + 10, y + 5, x + 5, y + 10, BLACK);
+    return;
+  }
+
+  const int code = internetWeatherCode;
+  if (code == 0) {
+    display.drawCircle(x + 8, y + 8, 4, BLACK);
+    for (uint8_t angle = 0; angle < 8; angle++) {
+      const int16_t dx = angle % 2 == 0 ? 0 : (angle < 4 ? 6 : -6);
+      const int16_t dy = angle % 2 == 0 ? (angle == 0 ? -7 : angle == 2 ? 7 : angle == 4 ? 0 : 0) : 0;
+      if (angle % 2 == 0) display.drawLine(x + 8, y + 8 + dy, x + 8, y + 8 + dy + (dy < 0 ? -2 : 2), BLACK);
+      else display.drawLine(x + 8 + dx, y + 8, x + 8 + dx + (dx < 0 ? -2 : 2), y + 8, BLACK);
+    }
+    return;
+  }
+
+  const bool snow = (code >= 71 && code <= 77) || code == 85 || code == 86;
+  const bool rain = (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
+  const bool storm = code >= 95;
+  const bool fog = code == 45 || code == 48;
+  const bool cloud = code == 1 || code == 2 || code == 3 || rain || snow || storm;
+
+  if (cloud) {
+    display.fillCircle(x + 6, y + 8, 4, BLACK);
+    display.fillCircle(x + 11, y + 7, 3, BLACK);
+    display.fillRect(x + 4, y + 8, 10, 5, BLACK);
+    display.drawPixel(x + 3, y + 12, WHITE);
+  }
+  if (fog) {
+    display.drawLine(x + 2, y + 6, x + 14, y + 6, BLACK);
+    display.drawLine(x + 1, y + 9, x + 13, y + 9, BLACK);
+    display.drawLine(x + 3, y + 12, x + 15, y + 12, BLACK);
+    return;
+  }
+  if (storm) {
+    display.fillTriangle(x + 9, y + 9, x + 5, y + 15, x + 9, y + 13, BLACK);
+    display.fillTriangle(x + 9, y + 13, x + 13, y + 7, x + 9, y + 9, BLACK);
+  } else if (snow) {
+    display.drawLine(x + 5, y + 14, x + 5, y + 16, BLACK);
+    display.drawLine(x + 10, y + 14, x + 10, y + 16, BLACK);
+    display.drawPixel(x + 5, y + 15, WHITE);
+    display.drawPixel(x + 10, y + 15, WHITE);
+  } else if (rain) {
+    display.drawLine(x + 6, y + 14, x + 4, y + 17, BLACK);
+    display.drawLine(x + 11, y + 14, x + 9, y + 17, BLACK);
+  } else if (!cloud) {
+    display.drawRect(x + 2, y + 2, 12, 12, BLACK);
+  }
 }
 
 const __FlashStringHelper *comfortLabel() {
@@ -154,6 +248,16 @@ String webMeasurementsJson() {
   json += F(" ,\"heat_index_c\":"); json += String(heatIndexC(), 2);
   json += F(" ,\"comfort\":\""); json += comfortLabel(); json += F("\"");
   json += F(" ,\"pressure_trend\":\""); json += pressureTrendLabel(); json += F("\"");
+  json += F(" ,\"internet_location\":\""); json += WEATHER_LOCATION; json += F("\"");
+  json += F(" ,\"internet_weather_ok\":"); json += internetWeatherOk ? F("true") : F("false");
+  json += F(" ,\"internet_weather\":\""); json += internetWeatherLabel(); json += F("\"");
+  json += F(" ,\"internet_temperature_c\":"); json += internetWeatherOk ? String(internetTemperatureC, 2) : F("null");
+  json += F(" ,\"internet_humidity_pct\":"); json += internetWeatherOk ? String(internetHumidity, 1) : F("null");
+  json += F(" ,\"internet_apparent_c\":"); json += internetWeatherOk ? String(internetApparentC, 2) : F("null");
+  json += F(" ,\"internet_rain_mm\":"); json += internetWeatherOk ? String(internetRainMm, 1) : F("null");
+  json += F(" ,\"internet_wind_kmh\":"); json += internetWeatherOk ? String(internetWindKmh, 1) : F("null");
+  json += F(" ,\"sunrise\":\""); json += sunriseTime; json += F("\"");
+  json += F(" ,\"sunset\":\""); json += sunsetTime; json += F("\"");
   json += F(" ,\"light_on\":"); json += lightOn ? F("true") : F("false");
   json += F(" ,\"ip\":\"");
   if (WiFi.status() == WL_CONNECTED) json += WiFi.localIP().toString();
@@ -199,8 +303,10 @@ void printHelp() {
   Serial.println(F("  JSON                 Print one machine-readable sensor record"));
   Serial.println(F("  PAGE 0|1|2           Select clock, weather or diagnostics page"));
   Serial.println(F("  FORECAST             Show pressure trend and comfort summary"));
+  Serial.println(F("  WEATHER              Refresh internet weather now"));
   Serial.println(F("  LIGHT ON|OFF         Switch the D0 light output"));
   Serial.println(F("  Web: http://<device-ip>/"));
+  Serial.println(F("  mDNS: http://weather-clock.local/"));
 }
 
 void readSensors() {
@@ -212,6 +318,41 @@ void readSensors() {
     minTemperature = min(minTemperature, temperatureC);
     maxTemperature = max(maxTemperature, temperatureC);
   }
+}
+
+void fetchInternetWeather() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  lastInternetWeather = millis();
+  WiFiClient client;
+  HTTPClient http;
+  String url = F("http://api.open-meteo.com/v1/forecast?latitude=");
+  url += String(WEATHER_LATITUDE, 4);
+  url += F("&longitude="); url += String(WEATHER_LONGITUDE, 4);
+  url += F("&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,precipitation,wind_speed_10m&daily=sunrise,sunset&forecast_days=1&timezone=auto");
+  http.setTimeout(5000);
+  if (!http.begin(client, url)) return;
+  const int status = http.GET();
+  if (status == HTTP_CODE_OK) {
+    DynamicJsonDocument document(1536);
+    const DeserializationError error = deserializeJson(document, http.getString());
+    if (!error) {
+      JsonObject current = document["current"];
+      internetTemperatureC = current["temperature_2m"] | NAN;
+      internetHumidity = current["relative_humidity_2m"] | NAN;
+      internetApparentC = current["apparent_temperature"] | NAN;
+      internetRainMm = current["precipitation"] | NAN;
+      internetWindKmh = current["wind_speed_10m"] | NAN;
+      internetWeatherCode = current["weather_code"] | -1;
+      internetWeatherOk = isfinite(internetTemperatureC);
+      JsonArray sunrise = document["daily"]["sunrise"];
+      JsonArray sunset = document["daily"]["sunset"];
+      if (!sunrise.isNull() && sunrise.size() > 0) sunriseTime = sunrise[0].as<const char *>();
+      if (!sunset.isNull() && sunset.size() > 0) sunsetTime = sunset[0].as<const char *>();
+      if (sunriseTime.length() >= 16) sunriseTime = sunriseTime.substring(11, 16);
+      if (sunsetTime.length() >= 16) sunsetTime = sunsetTime.substring(11, 16);
+    }
+  }
+  http.end();
 }
 
 void updatePressureTrend(uint32_t now) {
@@ -233,6 +374,20 @@ void printMeasurements(bool json = false) {
     Serial.print(F(",\"heat_index_c\":")); Serial.print(heatIndexC(), 2);
     Serial.print(F(",\"comfort\":\"")); Serial.print(comfortLabel()); Serial.print('"');
     Serial.print(F(",\"pressure_trend\":\"")); Serial.print(pressureTrendLabel()); Serial.print('"');
+    Serial.print(F(",\"internet_location\":\"")); Serial.print(WEATHER_LOCATION); Serial.print(F("\",\"internet_weather_ok\":"));
+    Serial.print(internetWeatherOk ? F("true") : F("false"));
+    Serial.print(F(",\"internet_weather\":\"")); Serial.print(internetWeatherLabel()); Serial.print('"');
+    Serial.print(F(",\"internet_temperature_c\":"));
+    if (internetWeatherOk) Serial.print(internetTemperatureC, 2); else Serial.print(F("null"));
+    Serial.print(F(",\"internet_humidity_pct\":"));
+    if (internetWeatherOk) Serial.print(internetHumidity, 1); else Serial.print(F("null"));
+    Serial.print(F(",\"internet_apparent_c\":"));
+    if (internetWeatherOk) Serial.print(internetApparentC, 2); else Serial.print(F("null"));
+    Serial.print(F(",\"internet_rain_mm\":"));
+    if (internetWeatherOk) Serial.print(internetRainMm, 1); else Serial.print(F("null"));
+    Serial.print(F(",\"internet_wind_kmh\":"));
+    if (internetWeatherOk) Serial.print(internetWindKmh, 1); else Serial.print(F("null"));
+    Serial.print(F(",\"sunrise\":\"")); Serial.print(sunriseTime); Serial.print(F("\",\"sunset\":\"")); Serial.print(sunsetTime); Serial.print('"');
     Serial.print(F(",\"light_on\":")); Serial.print(lightOn ? F("true") : F("false"));
     Serial.print(F(",\"ip\":\""));
     if (WiFi.status() == WL_CONNECTED) Serial.print(WiFi.localIP());
@@ -249,6 +404,14 @@ void printMeasurements(bool json = false) {
   Serial.print(F(" / ")); Serial.print(heatIndexC(), 2); Serial.println(F(" C"));
   Serial.print(F("Comfort: ")); Serial.println(comfortLabel());
   Serial.print(F("Pressure trend: ")); Serial.println(pressureTrendLabel());
+  Serial.print(F("Internet weather (")); Serial.print(WEATHER_LOCATION); Serial.print(F("): "));
+  if (internetWeatherOk) {
+    Serial.print(internetWeatherLabel()); Serial.print(F(", ")); Serial.print(internetTemperatureC, 1);
+    Serial.print(F(" C, rain ")); Serial.print(internetRainMm, 1);
+    Serial.print(F(" mm, wind ")); Serial.print(internetWindKmh, 1); Serial.println(F(" km/h"));
+  } else Serial.println(F("unavailable"));
+  Serial.print(F("Sunrise / sunset: ")); Serial.print(sunriseTime.length() ? sunriseTime : F("--"));
+  Serial.print(F(" / ")); Serial.println(sunsetTime.length() ? sunsetTime : F("--"));
   Serial.print(F("Light output (D0): ")); Serial.println(lightOn ? F("ON") : F("OFF"));
   Serial.print(F("IP: "));
   if (WiFi.status() == WL_CONNECTED) Serial.println(WiFi.localIP());
@@ -281,6 +444,17 @@ void connectWifi() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   lastWifiAttempt = millis();
   wifiRequested = true;
+}
+
+void setupMdns() {
+  if (mdnsStarted || WiFi.status() != WL_CONNECTED) return;
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    MDNS.addService("http", "tcp", WEB_SERVER_PORT);
+    mdnsStarted = true;
+    Serial.print(F("mDNS: http://")); Serial.print(MDNS_HOSTNAME); Serial.println(F(".local/"));
+  } else {
+    Serial.println(F("mDNS setup failed"));
+  }
 }
 
 void setupNtp() {
@@ -364,6 +538,9 @@ void handleCommand(String command) {
     Serial.print(F("; comfort is ")); Serial.println(comfortLabel());
     Serial.print(F("Dew point: ")); Serial.print(dewPointC(), 1);
     Serial.print(F(" C, feels like: ")); Serial.print(heatIndexC(), 1); Serial.println(F(" C"));
+  } else if (upper == "WEATHER") {
+    fetchInternetWeather();
+    Serial.print(F("Internet weather: ")); Serial.println(internetWeatherOk ? F("updated") : F("unavailable"));
   } else if (upper == "LIGHT ON" || upper == "LIGHT OFF") {
     lightOn = upper == "LIGHT ON";
     digitalWrite(PIN_LIGHT, lightOn ? LIGHT_ON_LEVEL : LIGHT_OFF_LEVEL);
@@ -374,6 +551,7 @@ void handleCommand(String command) {
     Serial.print(F("WiFi: "));
     if (WiFi.status() == WL_CONNECTED) Serial.println(WiFi.localIP());
     else Serial.println(F("disconnected"));
+    Serial.print(F("mDNS: ")); Serial.println(mdnsStarted ? F("weather-clock.local") : F("unavailable"));
     Serial.print(F("Uptime: ")); Serial.println(uptimeString());
   } else if (upper.startsWith("SET ")) {
     DateTime requested(2000, 1, 1, 0, 0, 0);
@@ -388,9 +566,29 @@ void drawDisplay() {
   display.setTextSize(1);
   DateTime now = rtcOk ? rtc.now() : DateTime(2000, 1, 1, 0, 0, 0);
   if (displayPage == 0) {
-    display.setCursor(0, 0); display.println(F("WEATHER CLOCK"));
+    display.setCursor(0, 0);
+    if (clockInfoPage == 0) {
+      display.println(F("WEATHER CLOCK"));
+    } else if (clockInfoPage == 1) {
+      display.print(F("RAIN "));
+      if (internetWeatherOk) display.print(internetRainMm, 1); else display.print(F("--"));
+      display.println(F(" mm"));
+    } else if (clockInfoPage == 2) {
+      display.print(F("OUT TEMP "));
+      if (internetWeatherOk) display.print(internetTemperatureC, 1); else display.print(F("--"));
+      display.println(F(" C"));
+    } else if (clockInfoPage == 3) {
+      display.print(F("WIND "));
+      if (internetWeatherOk) display.print(internetWindKmh, 1); else display.print(F("--"));
+      display.println(F(" km/h"));
+    } else if (clockInfoPage == 4) {
+      display.print(F("SUNRISE ")); display.println(sunriseTime.length() ? sunriseTime : F("--"));
+    } else {
+      display.print(F("SUNSET ")); display.println(sunsetTime.length() ? sunsetTime : F("--"));
+    }
     display.setTextSize(2); display.setCursor(0, 12);
     printTwoDigits(display, now.hour()); display.print(':'); printTwoDigits(display, now.minute());
+    drawWeatherIcon(64, 12);
     display.setTextSize(1); display.setCursor(0, 32);
     display.print(now.day()); display.print('/'); display.print(now.month()); display.print('/'); display.println(now.year());
     display.print(F("T ")); display.print(temperatureC, 1); display.print(F("C H ")); display.print(humidity, 0); display.println('%');
@@ -404,12 +602,16 @@ void drawDisplay() {
     display.print(F("Trend ")); display.println(pressureTrendLabel());
   } else {
     display.setCursor(0, 0); display.println(F("DIAGNOSTICS"));
-    display.print(F("RTC  ")); display.println(rtcOk ? F("OK") : F("FAIL"));
-    display.print(F("BME  ")); display.println(bmeOk ? F("OK") : F("FAIL"));
-    display.print(F("WiFi ")); display.println(WiFi.status() == WL_CONNECTED ? F("ON") : F("OFF"));
+    display.print(F("RTC ")); display.print(rtcOk ? F("OK") : F("FAIL"));
+    display.print(F(" BME ")); display.println(bmeOk ? F("OK") : F("FAIL"));
+    display.print(F("WiFi "));
+    if (WiFi.status() == WL_CONNECTED) display.println(F("CONNECTED"));
+    else if (wifiRequested) display.println(F("WAITING"));
+    else display.println(F("OFF"));
     display.print(F("D0   ")); display.println(lightOn ? F("ON") : F("OFF"));
     if (WiFi.status() == WL_CONNECTED) display.println(WiFi.localIP());
-    else display.println(F("none"));
+    else display.println(F("waiting for IP"));
+    display.print(F("Internet ")); display.println(internetWeatherOk ? F("OK") : F("waiting"));
   }
   display.display();
 }
@@ -419,7 +621,8 @@ void setup() {
   Serial.setTimeout(100);
   delay(100);
   pinMode(PIN_LIGHT, OUTPUT);
-  digitalWrite(PIN_LIGHT, LIGHT_OFF_LEVEL);
+  lightOn = true;
+  digitalWrite(PIN_LIGHT, LIGHT_ON_LEVEL);
   Serial.println(F("\nWemos D1 mini weather clock"));
   Wire.begin(PIN_SDA, PIN_SCL);
   rtcOk = rtc.begin();
@@ -432,6 +635,7 @@ void setup() {
   readSensors();
   updatePressureTrend(millis());
   connectWifi();
+  fetchInternetWeather();
   setupWebServer();
   printHelp();
   displayPage = 2;
@@ -460,14 +664,23 @@ void loop() {
       displayPage = 1;
       drawDisplay();
       lastDisplayUpdate = now;
+    } else if (displayPage == 2 && now - lastDisplayUpdate >= BOOT_DISPLAY_REFRESH_MS) {
+      lastDisplayUpdate = now;
+      drawDisplay();
     }
   } else if (now - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
     lastDisplayUpdate = now;
     displayPage = 0;
+    clockInfoPage = (clockInfoPage + 1) % 6;
     drawDisplay();
   }
   if (wifiRequested && WiFi.status() != WL_CONNECTED && now - lastWifiAttempt > 30000UL) connectWifi();
   if (WiFi.status() == WL_CONNECTED && !ntpConfigured) setupNtp();
+  if (WiFi.status() == WL_CONNECTED) setupMdns();
+  if (mdnsStarted) MDNS.update();
+  if (WiFi.status() == WL_CONNECTED && (lastInternetWeather == 0 || now - lastInternetWeather >= INTERNET_WEATHER_INTERVAL_MS)) {
+    fetchInternetWeather();
+  }
   if (WiFi.status() == WL_CONNECTED && ntpConfigured &&
       (lastNtpSync == 0 || now - lastNtpSync >= NTP_SYNC_INTERVAL_MS) &&
       (lastNtpAttempt == 0 || now - lastNtpAttempt >= NTP_RETRY_INTERVAL_MS)) syncRtcFromNtp();

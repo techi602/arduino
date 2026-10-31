@@ -6,3 +6,8 @@ constexpr char WIFI_PASSWORD[] = "your-wifi-password";
 
 // POSIX timezone: CET/CEST with automatic DST (Central Europe).
 constexpr char TZ_INFO[] = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+// Internet weather location used by Open-Meteo (Prague city centre by default).
+constexpr float WEATHER_LATITUDE = 50.0755F;
+constexpr float WEATHER_LONGITUDE = 14.4378F;
+constexpr char WEATHER_LOCATION[] = "Prague";
