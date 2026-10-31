@@ -197,6 +197,16 @@ void drawWeatherIcon(int16_t x, int16_t y) {
   }
 }
 
+void drawHumidityIcon(int16_t x, int16_t y) {
+  display.fillTriangle(x + 3, y, x, y + 4, x + 6, y + 4, BLACK);
+  display.fillCircle(x + 3, y + 5, 3, BLACK);
+  display.drawPixel(x + 2, y + 3, WHITE);
+}
+
+void drawDegreeSymbol(int16_t x, int16_t y) {
+  display.drawCircle(x + 1, y + 1, 1, BLACK);
+}
+
 const __FlashStringHelper *comfortLabel() {
   if (!isfinite(temperatureC) || !isfinite(humidity)) return F("unknown");
   if (temperatureC < 16.0F) return F("cool");
@@ -562,7 +572,11 @@ void drawDisplay() {
     drawWeatherIcon(64, 12);
     display.setTextSize(1); display.setCursor(0, 32);
     display.print(now.day()); display.print('/'); display.print(now.month()); display.print('/'); display.println(now.year());
-    display.print(F("T ")); display.print(temperatureC, 1); display.print(F("C H ")); display.print(humidity, 0); display.println('%');
+    display.setCursor(0, 40); display.print(temperatureC, 1);
+    const int16_t degreeX = display.getCursorX();
+    drawDegreeSymbol(degreeX, 40);
+    display.setCursor(degreeX + 4, 40); display.print('C');
+    drawHumidityIcon(48, 40); display.setCursor(58, 40); display.print(humidity, 0); display.print('%');
   } else if (displayPage == 1) {
     display.setCursor(0, 0); display.println(F("SENSOR DATA"));
     display.print(F("Temp: ")); display.print(temperatureC, 1); display.println(F(" C"));
