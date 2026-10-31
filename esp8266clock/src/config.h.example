@@ -1,0 +1,8 @@
+#pragma once
+
+// Copy this file to config.h and set the credentials for your network.
+constexpr char WIFI_SSID[] = "your-wifi-ssid";
+constexpr char WIFI_PASSWORD[] = "your-wifi-password";
+
+// POSIX timezone: CET/CEST with automatic DST (Central Europe).
+constexpr char TZ_INFO[] = "CET-1CEST,M3.5.0,M10.5.0/3";
