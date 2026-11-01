@@ -565,26 +565,38 @@ void drawDisplay() {
   display.setTextColor(BLACK);
   display.setTextSize(1);
   DateTime now = rtcOk ? rtc.now() : DateTime(2000, 1, 1, 0, 0, 0);
-  if (displayPage == 0) {
+  switch (displayPage) {
+  case 0: {
     display.setCursor(0, 0);
-    if (clockInfoPage == 0) {
+    switch (clockInfoPage) {
+    case 0:
       display.println(F("WEATHER CLOCK"));
-    } else if (clockInfoPage == 1) {
+      break;
+    case 1:
+      if (internetWeatherOk) display.println(internetWeatherLabel());
+      else display.println(F("--"));
+      break;
+    case 2:
       display.print(F("RAIN "));
       if (internetWeatherOk) display.print(internetRainMm, 1); else display.print(F("--"));
       display.println(F(" mm"));
-    } else if (clockInfoPage == 2) {
+      break;
+    case 3:
       display.print(F("OUT TEMP "));
       if (internetWeatherOk) display.print(internetTemperatureC, 1); else display.print(F("--"));
       display.println(F(" C"));
-    } else if (clockInfoPage == 3) {
+      break;
+    case 4:
       display.print(F("WIND "));
       if (internetWeatherOk) display.print(internetWindKmh, 1); else display.print(F("--"));
       display.println(F(" km/h"));
-    } else if (clockInfoPage == 4) {
+      break;
+    case 5:
       display.print(F("SUNRISE ")); display.println(sunriseTime.length() ? sunriseTime : F("--"));
-    } else {
+      break;
+    case 6:
       display.print(F("SUNSET ")); display.println(sunsetTime.length() ? sunsetTime : F("--"));
+      break;
     }
     display.setTextSize(2); display.setCursor(0, 12);
     printTwoDigits(display, now.hour()); display.print(':'); printTwoDigits(display, now.minute());
@@ -597,7 +609,9 @@ void drawDisplay() {
     display.setCursor(degreeX + 4, 40); display.print('C');
     display.setCursor(48, 40); display.print(humidity, 0); display.print('%');
     drawHumidityIcon(display.getCursorX(), 40);
-  } else if (displayPage == 1) {
+    break;
+  }
+  case 1:
     display.setCursor(0, 0); display.println(F("SENSOR DATA"));
     display.print(F("Temp: ")); display.print(temperatureC, 1); display.println(F(" C"));
     display.print(F("Hum : ")); display.print(humidity, 1); display.println(F(" %"));
@@ -605,7 +619,8 @@ void drawDisplay() {
     display.print(F("Dew : ")); display.print(dewPointC(), 1); display.println(F(" C"));
     display.print(F("Feel: ")); display.print(heatIndexC(), 1); display.println(F(" C"));
     display.print(F("Trend ")); display.println(pressureTrendLabel());
-  } else {
+    break;
+  case 2:
     display.setCursor(0, 0); display.println(F("DIAGNOSTICS"));
     display.print(F("RTC ")); display.print(rtcOk ? F("OK") : F("FAIL"));
     display.print(F(" BME ")); display.println(bmeOk ? F("OK") : F("FAIL"));
@@ -617,6 +632,7 @@ void drawDisplay() {
     if (WiFi.status() == WL_CONNECTED) display.println(WiFi.localIP());
     else display.println(F("waiting for IP"));
     display.print(F("Internet ")); display.println(internetWeatherOk ? F("OK") : F("waiting"));
+    break;
   }
   display.display();
 }
@@ -677,7 +693,7 @@ void loop() {
   } else if (now - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
     lastDisplayUpdate = now;
     displayPage = 0;
-    clockInfoPage = (clockInfoPage + 1) % 6;
+    clockInfoPage = (clockInfoPage + 1) % 7;
     drawDisplay();
   }
   if (wifiRequested && WiFi.status() != WL_CONNECTED && now - lastWifiAttempt > 30000UL) connectWifi();
